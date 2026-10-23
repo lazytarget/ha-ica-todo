@@ -1,6 +1,9 @@
 {
   "domain": "ica",
   "name": "ICA",
+  "categories": [
+    "productivity_information.calendars_todos"
+  ],
   "codeowners": [
     "@lazytarget"
   ],

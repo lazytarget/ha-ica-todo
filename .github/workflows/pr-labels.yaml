@@ -6,10 +6,55 @@ on:
   pull_request_target:
     types:
       - opened
+      - reopened
       - labeled
       - unlabeled
       - synchronize
 
+permissions: {}
+
 jobs:
-  workflows:
-    uses: lazytarget-homeassistant-apps/workflows/.github/workflows/pr-labels.yaml@65bd42230a18643538648b58fbdcbf386a870bb4
+  verify:
+    name: Verify
+    runs-on: ubuntu-latest
+    permissions:
+      pull-requests: read
+    steps:
+      # The payload of the triggering event holds the labels as they were when
+      # the event fired. The Release Drafter autolabeler adds labels a few
+      # seconds after the PR is opened, and labels added with GITHUB_TOKEN do
+      # not trigger new workflow runs. So read the live labels instead, and
+      # give the autolabeler time to finish when the PR was just opened/pushed.
+      - name: Verify PR has a valid label
+        env:
+          GH_TOKEN: ${{ github.token }}
+          REPO: ${{ github.repository }}
+          PR_NUMBER: ${{ github.event.pull_request.number }}
+          EVENT_ACTION: ${{ github.event.action }}
+          ALLOWED: >-
+            breaking-change bugfix documentation enhancement refactor
+            performance new-feature maintenance ci dependencies translations
+        run: |
+          attempts=1
+          case "$EVENT_ACTION" in
+            opened|reopened|synchronize) attempts=12 ;;
+          esac
+
+          for i in $(seq 1 "$attempts"); do
+            labels=$(gh api "repos/$REPO/issues/$PR_NUMBER/labels" --jq '.[].name')
+            for label in $labels; do
+              for allowed in $ALLOWED; do
+                if [ "$label" = "$allowed" ]; then
+                  echo "Found valid label: $label"
+                  exit 0
+                fi
+              done
+            done
+            if [ "$i" -lt "$attempts" ]; then
+              echo "No valid label yet (attempt $i/$attempts), waiting for autolabeler..."
+              sleep 10
+            fi
+          done
+
+          echo "::error::PR needs one of these labels: $ALLOWED"
+          exit 1
