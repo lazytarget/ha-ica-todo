@@ -1,5 +1,5 @@
+import datetime as dt
 import logging
-import json
 from typing import Any, TypeVar
 
 _DataT = TypeVar("_DataT", default=dict[Any, Any])
@@ -35,14 +35,8 @@ def get_diffs(a, b, key: str = "id", include_values: bool = True):
     diffs.extend([{"op": "-", key: row_id, "old": a[row_id]} for row_id in removed])
 
     a_set = set(a)
-    # aa = {k: v for k,v in a.items()}
-    # aa_set = set(a.keys())
     b_set = set(b)
-    # bb = {x[key]: x for x in b}
-    # bb = b.keys()
-    # bb_set = set(bb)
     remaining = a_set.intersection(b_set)
-    # remaining = aa_set.intersection(bb_set)
 
     for row_id in remaining:
         old = a[row_id]
@@ -182,10 +176,9 @@ def normalize_product_name(name: str | None) -> str:
             if normalized.endswith(suffix):
                 stem = normalized[:-2]
                 if len(stem) >= 3:
-                    if suffix == "or":
-                        # kakor -> kaka, gurkor -> gurka
-                        if stem[-1] not in "aeiouyåäö":
-                            return stem + "a"
+                    # kakor -> kaka, gurkor -> gurka
+                    if suffix == "or" and stem[-1] not in "aeiouyåäö":
+                        return stem + "a"
                     return stem
 
     # NOTE: We do not strip trailing 'a' in general, to avoid turning
@@ -228,8 +221,8 @@ def normalize_product_name(name: str | None) -> str:
     # English: s vs es disambiguation
     # For words ending in 's', determine whether to strip 's' or 'es'
     if len(normalized) >= 4 and normalized.endswith("s"):
-        # Words like "ananas" are singular even though they end with 's'
-        if normalized.endswith("anas"):
+        # "ananas" is singular even though it ends with 's' (but "bananas" is plural)
+        if normalized.split()[-1] == "ananas":
             return normalized
         # First try removing just 's'
         stem_s = normalized[:-1]
@@ -237,12 +230,11 @@ def normalize_product_name(name: str | None) -> str:
         # If ends in 'es', might need to remove 'es' instead of just 's'
         if len(normalized) >= 5 and normalized.endswith("es"):
             stem_es = normalized[:-2]
-            if len(stem_es) >= 3:
-                # Remove 'es' for words ending in x, z, s, o
-                # (boxes → box, buzzes → buzz, tomatoes → tomato)
-                if stem_es[-1] in "xzso":
-                    return stem_es
-                # For other 'es' endings, prefer removing just 's' (apples → apple)
+            # Remove 'es' for words ending in x, z, s, o
+            # (boxes → box, buzzes → buzz, tomatoes → tomato)
+            # For other 'es' endings, prefer removing just 's' (apples → apple)
+            if len(stem_es) >= 3 and stem_es[-1] in "xzso":
+                return stem_es
 
         # Remove just 's' if it produces a valid stem
         if len(stem_s) >= 3 and not stem_s.endswith("s"):
@@ -269,13 +261,13 @@ DEFAULT_UNIT = "st"
 
 # Volume – conversion factors to the base unit (ml)
 _VOLUME_TO_ML: dict[str, float] = {
-    "l": 1000.0,     # liter
-    "dl": 100.0,     # deciliter
-    "cl": 10.0,      # centiliter
-    "ml": 1.0,       # milliliter
-    "krm": 1.0,      # kryddmått  ≈ 1 ml  (a pinch)
-    "tsk": 5.0,      # tesked            (teaspoon)
-    "msk": 15.0,     # matsked           (tablespoon)
+    "l": 1000.0,  # liter
+    "dl": 100.0,  # deciliter
+    "cl": 10.0,  # centiliter
+    "ml": 1.0,  # milliliter
+    "krm": 1.0,  # kryddmått  ≈ 1 ml  (a pinch)
+    "tsk": 5.0,  # tesked            (teaspoon)
+    "msk": 15.0,  # matsked           (tablespoon)
 }
 
 # Weight – conversion factors to the base unit (g)
@@ -449,13 +441,15 @@ def merge_shopping_list_entries(base: dict, other: dict) -> dict:
     base_qty: float | None = base.get("quantity")
     other_qty: float | None = other.get("quantity")
 
-    if base_qty is None:
-        base_qty = 1  # Default to 1 when quantity is missing, to allow summing with other quantities. This assumes that a missing quantity implies "1 piece".
-    if other_qty is None:
-        other_qty = 1  # Same defaulting for the other entry.
-
     # --- Merge quantity & unit ---
-    if base_qty is not None and other_qty is not None:
+    if base_qty is None and other_qty is not None and other.get("unit"):
+        # Only *other* has an explicit amount (e.g. "500 g") – adopt it wholesale
+        result["quantity"] = other_qty
+        result["unit"] = _effective_unit(other.get("unit"))
+    else:
+        # A missing quantity implies "1 piece", so adding "Salt" twice gives 2 st
+        base_qty = 1 if base_qty is None else base_qty
+        other_qty = 1 if other_qty is None else other_qty
         base_unit = _effective_unit(base.get("unit"))
         other_unit = _effective_unit(other.get("unit"))
 
@@ -464,14 +458,9 @@ def merge_shopping_list_entries(base: dict, other: dict) -> dict:
             result["quantity"] = added[0]
             result["unit"] = added[1]
         else:
-            # Incompatible units – keep base values, but materialise the default
+            # Incompatible units – keep base values, but materialise the defaults
+            result["quantity"] = base_qty
             result["unit"] = base_unit
-    elif base_qty is None and other_qty is not None:
-        # Only *other* has a quantity – adopt it wholesale
-        result["quantity"] = other_qty
-        result["unit"] = _effective_unit(other.get("unit"))
-
-    # else: base already has the best value (or both are None)
 
     # --- Merge recipe references ---
     merged_recipes = _merge_recipe_refs(base.get("recipes"), other.get("recipes"))
@@ -486,18 +475,85 @@ def merge_shopping_list_entries(base: dict, other: dict) -> dict:
     return result
 
 
-if __name__ == "__main__":
-    print("Testing `get_diffs(old, new)`")
-    # o = [{"id": 1, "name": "OLD"}, {"id": 3, "name": "gone!"}]
-    # n = [{"id": 1, "name": "FOO"}, {"id": 2, "name": "BAR"}]
+def resolve_list_entity_ids(
+    registry_entries, config_entry_id: str, offline_ids
+) -> dict[str, str]:
+    """Map shopping list offline IDs to todo entity IDs.
 
-    j = open(
-        "C:\\HomeAssistant\\config\\.storage\\ica.offers_event_data_diff_base2.json",
-        "r",
-    ).read()
-    doc = json.loads(j)
-    o = doc["value"]["old"]
-    n = doc["value"]["new"]
-    print(o)
-    print(n)
-    print(get_diffs(o, n))
+    `registry_entries` is an iterable of `(unique_id, entity_id)` tuples. Matching is
+    case-insensitive since ICA returns offline IDs in upper case. Offline IDs without
+    a registered entity are omitted.
+    """
+    prefix = f"{config_entry_id}-"
+    by_offline_id = {
+        unique_id[len(prefix) :].casefold(): entity_id
+        for unique_id, entity_id in registry_entries
+        if unique_id.startswith(prefix)
+    }
+    return {
+        offline_id: by_offline_id[offline_id.casefold()]
+        for offline_id in offline_ids
+        if offline_id.casefold() in by_offline_id
+    }
+
+
+def build_lists_changed_event(
+    config_entry_id: str,
+    created: list[str] | None = None,
+    deleted: list[str] | None = None,
+    entities: dict[str, str] | None = None,
+) -> dict:
+    """Payload for the `ica_lists_changed` event."""
+    return {
+        "config_entry_id": config_entry_id,
+        "created": list(created or []),
+        "deleted": list(deleted or []),
+        "entities": dict(entities or {}),
+    }
+
+
+def diff_list_rows(old_rows, new_rows) -> dict[str, list]:
+    """Compare shopping list rows by `offlineId`.
+
+    Returns `added` ([{uid, summary}]), `removed` ([uid]) and `changed`
+    ([{uid, summary, changed_props}]). Empty when nothing differs.
+    """
+    old = {r["offlineId"]: r for r in old_rows or [] if r.get("offlineId")}
+    new = {r["offlineId"]: r for r in new_rows or [] if r.get("offlineId")}
+    added = [
+        {"uid": uid, "summary": row.get("productName")}
+        for uid, row in new.items()
+        if uid not in old
+    ]
+    removed = [uid for uid in old if uid not in new]
+    changed = []
+    for uid, row in new.items():
+        if uid not in old:
+            continue
+        props = [
+            k for k in row if k != "latestChange" and row.get(k) != old[uid].get(k)
+        ]
+        if props:
+            changed.append(
+                {"uid": uid, "summary": row.get("productName"), "changed_props": props}
+            )
+    return {"added": added, "removed": removed, "changed": changed}
+
+
+def utc_timestamp(now: dt.datetime | None = None) -> str:
+    """ICA style UTC timestamp, e.g. '2024-03-10T12:00:00Z'."""
+    now = now or dt.datetime.now(dt.UTC)
+    return now.astimezone(dt.UTC).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+
+def parse_aware_datetime(
+    value: str | None, default_tz: dt.tzinfo = dt.UTC
+) -> dt.datetime | None:
+    """Parse an ISO timestamp, assuming `default_tz` when it has no offset."""
+    if not value:
+        return None
+    try:
+        parsed = dt.datetime.fromisoformat(value)
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed.tzinfo else parsed.replace(tzinfo=default_tz)

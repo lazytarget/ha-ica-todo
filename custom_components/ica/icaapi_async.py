@@ -2,19 +2,20 @@ import asyncio
 
 from .icaapi import IcaAPI
 from .icatypes import (
+    AuthCredentials,
+    AuthState,
     IcaAccountCurrentBonus,
     IcaArticle,
     IcaArticleOffer,
     IcaBaseItem,
+    IcaProductCategory,
+    IcaRecipe,
     IcaShoppingList,
     IcaShoppingListSync,
     IcaStore,
-    IcaProductCategory,
-    IcaRecipe,
     OffersAndDiscountsForStore,
     ProductLookup,
 )
-from .icatypes import AuthCredentials, AuthState
 
 
 async def run_async(func):

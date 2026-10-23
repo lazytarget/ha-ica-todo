@@ -1,5 +1,4 @@
 import logging
-from datetime import datetime
 
 import requests
 
@@ -34,13 +33,13 @@ from .icatypes import (
     OffersAndDiscountsForStore,
     ProductLookup,
 )
+from .utils import utc_timestamp
 
 _LOGGER = logging.getLogger(__name__)
 
 
 def get_rest_url(endpoint: str):
-    # return "/".join([API.URLs.BASE_URL, endpoint])
-    return "/".join([API.URLs.QUERY_BASE, endpoint])
+    return f"{API.URLs.QUERY_BASE}/{endpoint}"
 
 
 class IcaAPI:
@@ -68,7 +67,6 @@ class IcaAPI:
         return self._auth_state
 
     def get_authenticated_user(self):
-        # return self._user
         return self._auth_state
 
     def get_shopping_lists(self) -> list[IcaShoppingList]:
@@ -120,9 +118,7 @@ class IcaAPI:
     def get_favorite_products(self):
         url = get_rest_url(MY_COMMON_ARTICLES_ENDPOINT)
         fav_products = get(self._session, url, self._auth_key)
-        return (
-            fav_products["commonArticles"] if "commonArticles" in fav_products else None
-        )
+        return fav_products.get("commonArticles") if fav_products else None
 
     def get_offers_for_store(self, store_id: int) -> OffersAndDiscountsForStore:
         url = str.format(get_rest_url(STORE_OFFERS_ENDPOINT), store_id)
@@ -132,7 +128,7 @@ class IcaAPI:
         all_store_offers = {
             str(store_id): self.get_offers_for_store(store_id) for store_id in store_ids
         }
-        _LOGGER.info("Fetched offers for stores: %s", store_ids)
+        _LOGGER.debug("Fetched offers for stores: %s", store_ids)
         return all_store_offers
 
     def search_offers(
@@ -163,10 +159,7 @@ class IcaAPI:
         return get(self._session, url, self._auth_key)
 
     def get_product_categories(self) -> list[IcaProductCategory]:
-        url = get_rest_url(
-            # str.format(ARTICLEGROUPS_ENDPOINT, datetime.date(datetime.now()))
-            str.format(ARTICLEGROUPS_ENDPOINT, "2001-01-01")
-        )
+        url = get_rest_url(str.format(ARTICLEGROUPS_ENDPOINT, "2001-01-01"))
         return get(self._session, url, self._auth_key)
 
     def create_shopping_list(
@@ -179,25 +172,24 @@ class IcaAPI:
             "commentText": comment,
             "sortingStore": 1 if store_sorting else 0,
             "rows": [],
-            "latestChange": f"{datetime.utcnow().replace(microsecond=0).isoformat()}Z",
+            "latestChange": utc_timestamp(),
         }
-        post(self._session, url, self._auth_key, data)
-        # list_id = response["id"]
-        return self.get_shopping_list(offline_id)
+        response = post(self._session, url, self._auth_key, data)
+        try:
+            return self.get_shopping_list(offline_id)
+        except requests.exceptions.RequestException:
+            # The list may not be readable immediately after creation
+            return response
 
     def sync_shopping_list(self, data: IcaShoppingListSync) -> IcaShoppingList:
         url = str.format(get_rest_url(MY_LIST_SYNC_ENDPOINT), data["offlineId"])
-        # new_rows = [x for x in data["rows"] if "sourceId" in x and x["sourceId"] == -1]
-        # data = {"changedRows": new_rows}
-
-        if "deletedRows" in data:
-            sync_data = {"deletedRows": data["deletedRows"]}
-        elif "changedRows" in data:
-            sync_data = {"changedRows": data["changedRows"]}
-        elif "createdRows" in data:
-            sync_data = {"createdRows": data["createdRows"]}
-        else:
-            sync_data = data
+        # Send every kind of row change, so e.g. an upsert with both new and
+        # merged rows doesn't drop one of them
+        sync_data = {
+            key: data[key]
+            for key in ("createdRows", "changedRows", "deletedRows")
+            if data.get(key)
+        } or data
 
         return post(self._session, url, self._auth_key, sync_data)
 

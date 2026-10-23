@@ -1,8 +1,10 @@
 import asyncio
 import logging
 from collections.abc import Callable
-from homeassistant.core import HomeAssistant
+from typing import Any
+
 from homeassistant.config_entries import ConfigEntry, ConfigEntryState
+from homeassistant.core import HomeAssistant
 from homeassistant.helpers.event import async_call_later
 
 _LOGGER = logging.getLogger(__name__)
@@ -17,12 +19,11 @@ class BackgroundWorker:
         config_entry: ConfigEntry,
         send_interval: int = 60,
     ) -> None:
-        # Example: CacheEntry(hass, f"{self._config_entry.data[CONF_ICA_ID]}.baseitems")
         self._hass: HomeAssistant = hass
         self._send_interval: int = send_interval
         self._config_entry = config_entry
         self._shutdown: bool = False
-        self._queue: asyncio.Queue[tuple[str, dict[str, any]]] = asyncio.Queue()
+        self._queue: asyncio.Queue[tuple[str, dict[str, Any]]] = asyncio.Queue()
         self._queue_send_remover: Callable[[], None] | None = None
         self._schedule_next_send()
 
@@ -56,16 +57,7 @@ class BackgroundWorker:
         )
         while not self._queue.empty():
             (event_type, event_data) = self._queue.get_nowait()
-            _LOGGER.debug(
-                "ICA - ADDING EXECUTOR JOB: %s, length=%s",
-                event_type,
-                len(str(event_data)),
-            )
-            await self._hass.async_add_executor_job(
-                self.fire_event, event_type, event_data
-            )
-
-            # self.fire_event(event_type, event_data)
+            self.fire_event(event_type, event_data)
         self._schedule_next_send()
 
     async def fire_or_queue_event(self, event_type, event_data) -> None:
@@ -83,13 +75,5 @@ class BackgroundWorker:
 
     def fire_event(self, event_type, event_data) -> None:
         """Immediately tells Home Assistant to fire an event."""
-        _LOGGER.info(
-            "ICA - FIRING EVENT: %s, len: %s",
-            event_type,
-            len(bytes(str(event_data), "utf-8")),
-        )
-        _LOGGER.warning("Event data: %s", str(event_data)[:100])
-        self._hass.bus.fire(
-            event_type,
-            event_data,
-        )
+        _LOGGER.debug("ICA - FIRING EVENT: %s", event_type)
+        self._hass.bus.async_fire(event_type, event_data)

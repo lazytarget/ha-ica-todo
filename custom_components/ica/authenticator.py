@@ -1,9 +1,8 @@
 import base64
-import hashlib
 import datetime
+import hashlib
 import logging
 import re
-from typing import Dict
 from os import urandom
 
 import homeassistant.util.dt as dt_util
@@ -11,6 +10,7 @@ import jwt
 import requests
 
 from .const import API
+from .exceptions import IcaAuthError
 from .icatypes import AuthCredentials, AuthState, JwtUserInfo, OAuthClient, OAuthToken
 
 _LOGGER = logging.getLogger(__name__)
@@ -33,7 +33,7 @@ class IcaAuthenticator:
         self._credentials = credentials
 
     def get_rest_url(self, endpoint: str):
-        return "/".join([API.URLs.BASE_URL, endpoint])
+        return f"{API.URLs.BASE_URL}/{endpoint}"
 
     def invoke_get(
         self,
@@ -44,9 +44,6 @@ class IcaAuthenticator:
         timeout=30,
         allow_redirects=True,
     ):
-        if data is not None:
-            _LOGGER.debug("[GET] %s Request Data: %s", url, data)
-
         response = self._session.get(
             url,
             params=params,
@@ -56,13 +53,8 @@ class IcaAuthenticator:
             allow_redirects=allow_redirects,
         )
 
-        s = response.status_code not in [200, 201, 302, 303]
-        if not s:
+        if response.status_code not in [200, 201, 302, 303]:
             _LOGGER.warning("[GET] %s Response Code: %s", url, response.status_code)
-            if "json" in response.headers.get(
-                "Content-Type", "application/json"
-            ) or response.status_code not in [200, 201]:
-                _LOGGER.debug("[GET] %s Response Text: %s", url, response.text)
 
         response.raise_for_status()
         return response
@@ -77,11 +69,6 @@ class IcaAuthenticator:
         timeout=30,
         allow_redirects=True,
     ):
-        if data is not None:
-            _LOGGER.debug("[POST] %s Request Data: %s", url, data)
-        if json_data is not None:
-            _LOGGER.debug("[POST] %s Request Json: %s", url, json_data)
-
         response = self._session.post(
             url,
             params=params,
@@ -92,13 +79,8 @@ class IcaAuthenticator:
             allow_redirects=allow_redirects,
         )
 
-        s = response.status_code not in [200, 201, 302, 303]
-        if not s:
+        if response.status_code not in [200, 201, 302, 303]:
             _LOGGER.warning("[POST] %s Response Code: %s", url, response.status_code)
-            if "json" in response.headers.get(
-                "Content-Type", "application/json"
-            ) or response.status_code not in [200, 201]:
-                _LOGGER.debug("[POST] %s Response Text: %s", url, response.text)
 
         response.raise_for_status()
         return response
@@ -144,12 +126,10 @@ class IcaAuthenticator:
         response = self.invoke_get(url, params=p, allow_redirects=False)
         response.raise_for_status()
 
-        location = response.headers["Location"]
-        if location is None:
-            raise ValueError("Expected a Location redirect")
-
-        state = re.search(r"&state=(\w*)", location)[1]
-        _LOGGER.debug("State (Client): %s", state)
+        location = response.headers.get("Location")
+        if not location or not (match := re.search(r"&state=(\w*)", location)):
+            raise IcaAuthError("Expected a Location redirect with a state")
+        state = match[1]
 
         # GET /authn/authenticate
         response = self.invoke_get(location)
@@ -164,29 +144,31 @@ class IcaAuthenticator:
             "password": credentials["password"],
         }
         # Posts login form...
-        response = self.invoke_post(url, data=d)
-        if response.status_code == 400:
-            raise RuntimeError(
-                "Got 404 on Login request, might be incorrect credentials?"
-            )
-
-        response.raise_for_status()
+        try:
+            response = self.invoke_post(url, data=d)
+        except requests.exceptions.HTTPError as err:
+            if err.response is not None and err.response.status_code in (400, 401):
+                raise IcaAuthError(
+                    "Login was rejected, check the personal ID number and PIN"
+                ) from err
+            raise
 
         api_state = re.search(
             r'<input type="hidden" name="state" value="(\w*)', response.text
-        )[1]
+        )
         token = re.search(
             r'<input type="hidden" name="token" value="(\w*)', response.text
-        )[1]
-
-        if api_state != state:
-            _LOGGER.warning(
-                "States are different! Client: %s, Server: %s", state, api_state
+        )
+        if not api_state or not token:
+            # The login form is shown again when the credentials are wrong
+            raise IcaAuthError(
+                "Login was rejected, check the personal ID number and PIN"
             )
-        else:
-            _LOGGER.debug("State (Server): %s", api_state)
 
-        return token
+        if api_state[1] != state:
+            _LOGGER.warning("Login states differ between client and server")
+
+        return token[1]
 
     def get_access_token(
         self, registered_app: OAuthClient, state, token, code_verifier
@@ -205,12 +187,12 @@ class IcaAuthenticator:
         response = self.invoke_post(url, params=p, data=d, allow_redirects=False)
         response.raise_for_status()
 
-        location = response.headers["Location"]
-        if location is None:
-            raise ValueError("Expected a Location redirect")
-
-        code = re.search(r"&code=(\w*)", location)[1]
-        _LOGGER.debug("Code: %s", code)
+        location = response.headers.get("Location")
+        if not location or not (match := re.search(r"&code=(\w*)", location)):
+            raise IcaAuthError(
+                "Expected a Location redirect with an authorization code"
+            )
+        code = match[1]
 
         # GET /authn/authenticate
         url = self.get_rest_url(API.URLs.OAUTH2_TOKEN_ENDPOINT)
@@ -236,7 +218,7 @@ class IcaAuthenticator:
         url = self.get_rest_url(API.URLs.OAUTH2_TOKEN_ENDPOINT)
 
         basic_auth = IcaAuthenticator.generate_basic_auth(registered_app)
-        h: Dict[str, str] = {"Authorization": f"Basic {basic_auth}"}
+        h: dict[str, str] = {"Authorization": f"Basic {basic_auth}"}
         d = {
             "grant_type": "refresh_token",
             "refresh_token": auth_token["refresh_token"],
@@ -251,23 +233,18 @@ class IcaAuthenticator:
         """Generates the value for a Basic Auth header"""
         client_id = registered_app["client_id"]
         client_secret = registered_app["client_secret"]
-        return base64.b64encode(f"{client_id}:{client_secret}".encode("utf-8")).decode(
-            "ascii"
-        )
+        return base64.b64encode(f"{client_id}:{client_secret}".encode()).decode("ascii")
 
     @staticmethod
     def generate_code_challenge():
         """Generates a code_challenge and code_verifier"""
         code_verifier = base64.urlsafe_b64encode(urandom(40)).decode("utf-8")
-        re.sub("[^a-zA-Z0-9]+", "", code_verifier)
         code_verifier = re.sub("[^a-zA-Z0-9]+", "", code_verifier)
 
         code_challenge = hashlib.sha256(code_verifier.encode("utf-8")).digest()
         code_challenge = base64.urlsafe_b64encode(code_challenge).decode("utf-8")
         code_challenge = code_challenge.replace("=", "")
 
-        _LOGGER.debug("code_challenge: %s", code_challenge)
-        _LOGGER.debug("code_verifier: %s", code_verifier)
         return (code_challenge, code_verifier)
 
     def get_auth_state(self) -> AuthState | None:
@@ -290,15 +267,12 @@ class IcaAuthenticator:
         retry: int = 0,
     ) -> AuthState:
         """This will initiate an new login based on the current state and token expiration"""
-        _LOGGER.debug("Handle login :: Starting state: %s", auth_state)
         now = dt_util.utcnow()
 
         if new_client := not auth_state.get("client", None):
             # Initialize new client app to get a client_id/client_secret
             auth_state["client"] = self.register_app()
-            _LOGGER.debug(
-                "Handle login :: Initialized client: %s", auth_state["client"]
-            )
+            _LOGGER.debug("Handle login :: Initialized new client")
 
         current_token = auth_state.get("token", None)
         current_token_expiry = (
@@ -306,7 +280,6 @@ class IcaAuthenticator:
             if current_token and current_token.get("expiry", None)
             else None
         )
-        # todo: set earlier expiry, to ensure refresh before token gets killed
 
         if new_client or not current_token:
             auth_state = self._handle_new_login(credentials, auth_state)
@@ -329,7 +302,7 @@ class IcaAuthenticator:
         except requests.exceptions.HTTPError as err:
             if err.response.status_code == 400:
                 if retry > 2:
-                    _LOGGER.fatal("Could not refresh a new token")
+                    _LOGGER.error("Could not refresh the ICA token")
                     raise
                 # Initiate a new login
                 _LOGGER.info(
@@ -337,7 +310,7 @@ class IcaAuthenticator:
                     err.response.status_code,
                 )
                 auth_state = auth_state.copy()
-                del auth_state["token"]
+                auth_state.pop("token", None)
 
                 return self._handle_login(
                     credentials, auth_state, refresh, retry=retry + 1
@@ -349,7 +322,6 @@ class IcaAuthenticator:
             )
             raise
 
-        _LOGGER.debug("Handle login :: final Auth_State: %s", auth_state)
         return auth_state
 
     def _handle_new_login(self, credentials: AuthCredentials, auth_state: AuthState):
@@ -374,14 +346,12 @@ class IcaAuthenticator:
             now
             + datetime.timedelta(seconds=auth_state["token"].get("expires_in", 2592000))
         )
-        _LOGGER.debug("Handle login :: Access Token: %s", access_token)
 
         # Parse and append the Person Name
         decoded = jwt.decode(
             access_token["id_token"], options={"verify_signature": False}
         )
         auth_state["user"] = JwtUserInfo(decoded)
-        _LOGGER.debug("Handle login :: Jwt user info: %s", auth_state["user"])
         return auth_state
 
     def _handle_refresh_login(self, auth_state: AuthState):
@@ -398,11 +368,7 @@ class IcaAuthenticator:
                     seconds=auth_state["token"].get("expires_in", 2592000)
                 )
             )
-            _LOGGER.debug("Handle login :: Refresh Token: %s", auth_state["token"])
+            _LOGGER.debug("Handle login :: Refreshed token")
         else:
-            _LOGGER.warning(
-                "Handle login :: Failed to refresh token. Access token: %s",
-                auth_state["token"],
-            )
-            raise RuntimeError("Failed to retrieve a refresh token")
+            raise IcaAuthError("Failed to refresh the ICA token")
         return auth_state

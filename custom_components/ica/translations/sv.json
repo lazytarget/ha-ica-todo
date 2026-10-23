@@ -1,0 +1,188 @@
+{
+  "config": {
+    "step": {
+      "user": {
+        "description": "Logga in med samma personnummer och PIN-kod som i ICA-appen.",
+        "data": {
+          "personal_id": "Personnummer",
+          "pin_code": "ICA PIN-kod",
+          "scan_interval": "Uppdateringsintervall (minuter)"
+        },
+        "data_description": {
+          "personal_id": "10 eller 12 siffror, utan bindestreck",
+          "pin_code": "4-6 siffror",
+          "scan_interval": "Hur ofta data hämtas från ICA"
+        }
+      },
+      "reauth_confirm": {
+        "title": "Logga in på ICA igen",
+        "description": "Inloggningen för {account} slutade fungera. Ange din ICA PIN-kod.",
+        "data": {
+          "pin_code": "ICA PIN-kod"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Det gick inte att ansluta",
+      "invalid_auth": "Felaktigt personnummer eller PIN-kod",
+      "unknown": "Oväntat fel"
+    },
+    "abort": {
+      "single_instance_allowed": "Redan konfigurerad. Endast en konfiguration är möjlig.",
+      "already_configured": "Kontot är redan konfigurerat",
+      "reauth_successful": "Inloggningen lyckades"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Uppdateringsintervall (minuter)",
+          "json_data_in_desc": "JSON-data i beskrivningen",
+          "shopping_lists": "Inköpslistor"
+        },
+        "data_description": {
+          "scan_interval": "Hur ofta data hämtas från ICA",
+          "json_data_in_desc": "Visa extra data (mängd, erbjudande, EAN, ...) som JSON i varje varas beskrivning",
+          "shopping_lists": "Inköpslistorna som ska visas som att göra-listor"
+        }
+      }
+    },
+    "error": {
+      "cannot_connect": "Kunde inte hämta inköpslistorna från ICA, de följda listorna kan inte ändras just nu"
+    }
+  },
+  "entity": {
+    "todo": {
+      "baseitems": {
+        "name": "Favoritvaror"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "{target} är inte laddad"
+    },
+    "integration_not_found": {
+      "message": "ICA-kontot {target} hittades inte"
+    }
+  },
+  "services": {
+    "refresh_all": {
+      "name": "Uppdatera allt",
+      "description": "Hämtar all data från ICA igen, utan cache"
+    },
+    "get_recipe": {
+      "name": "Hämta recept",
+      "description": "Hämtar ett ICA-recept",
+      "fields": {
+        "recipe_id": {
+          "name": "Recept-ID",
+          "description": "ID för receptet som ska hämtas"
+        }
+      }
+    },
+    "lookup_product": {
+      "name": "Slå upp produkt",
+      "description": "Hämtar information om en produkt",
+      "fields": {
+        "identifier": {
+          "name": "Streckkod",
+          "description": "EAN/GTIN/streckkod"
+        }
+      }
+    },
+    "get_baseitems": {
+      "name": "Hämta favoritvaror",
+      "description": "Hämtar kontots favoritvaror",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot som ska användas"
+        }
+      }
+    },
+    "add_baseitem": {
+      "name": "Lägg till favoritvara",
+      "description": "Lägger till en favoritvara på kontot",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot som ska användas"
+        },
+        "identifier": {
+          "name": "Namn / streckkod",
+          "description": "Antingen ett namn i fritext eller en streckkod"
+        }
+      }
+    },
+    "upsert_shopping_list": {
+      "name": "Lägg till eller uppdatera rader",
+      "description": "Lägger till eller uppdaterar rader i en inköpslista",
+      "fields": {
+        "entity_id": {
+          "name": "Inköpslista",
+          "description": "ICA-inköpslistan"
+        },
+        "rows": {
+          "name": "Rader",
+          "description": "Raderna som ska läggas till eller uppdateras, som text (t.ex. '2 st Gurka') eller JSON-objekt"
+        },
+        "conflict_mode": {
+          "name": "Konfliktläge",
+          "description": "Vad som ska hända om varan redan finns: APPEND lägger till en ny rad, MERGE summerar mängderna, IGNORE behåller den befintliga raden"
+        }
+      }
+    },
+    "add_offers_to_shopping_list": {
+      "name": "Lägg till erbjudanden i inköpslista",
+      "description": "Lägger till aktuella erbjudanden i en inköpslista",
+      "fields": {
+        "entity_id": {
+          "name": "Inköpslista",
+          "description": "ICA-inköpslistan"
+        },
+        "offer_ids": {
+          "name": "Erbjudande-ID:n",
+          "description": "ID:n för erbjudandena som ska läggas till"
+        },
+        "conflict_mode": {
+          "name": "Konfliktläge",
+          "description": "Vad som ska hända om varan redan finns: APPEND lägger till en ny rad, MERGE summerar mängderna, IGNORE behåller den befintliga raden"
+        }
+      }
+    },
+    "create_shopping_list": {
+      "name": "Skapa inköpslista",
+      "description": "Skapar en ny inköpslista på ditt ICA-konto och visar den som att göra-lista om du vill",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot som ska användas"
+        },
+        "title": {
+          "name": "Titel",
+          "description": "Namn på den nya inköpslistan"
+        },
+        "comment": {
+          "name": "Kommentar",
+          "description": "Valfri kommentar på listan"
+        },
+        "track": {
+          "name": "Följ i Home Assistant",
+          "description": "Lägg till listan som att göra-entitet (laddar om integrationen)"
+        }
+      }
+    },
+    "delete_shopping_list": {
+      "name": "Ta bort inköpslista",
+      "description": "Tar permanent bort en inköpslista från ditt ICA-konto och från Home Assistant",
+      "fields": {
+        "entity_id": {
+          "name": "Inköpslista",
+          "description": "ICA-inköpslistan"
+        }
+      }
+    }
+  }
+}

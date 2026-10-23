@@ -2,6 +2,7 @@
     "name": "ICA shopping list",
     "render_readme": true,
     "country": "SE",
+    "homeassistant": "2025.1.0",
     "content_in_root": false,
     "zip_release": true,
     "filename": "ica.zip"

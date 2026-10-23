@@ -117,3 +117,46 @@ add_offers_to_shopping_list:
             - "APPEND"
             - "MERGE"
             - "IGNORE"
+
+create_shopping_list:
+  fields:
+    integration:
+      name: "ICA Account"
+      required: true
+      selector:
+        config_entry:
+          integration: ica
+    title:
+      name: "Title"
+      description: "Name of the new shopping list"
+      example: "Att handla fredag"
+      required: true
+      selector:
+        text:
+    comment:
+      name: "Comment"
+      description: "Optional comment on the list"
+      required: false
+      selector:
+        text:
+    track:
+      name: "Track in Home Assistant"
+      description: "Add the new list as a to-do entity (reloads the integration)"
+      default: true
+      selector:
+        boolean:
+
+delete_shopping_list:
+  fields:
+    entity_id:
+      name: "Shopping list"
+      description: "The ICA shopping list to permanently delete from your ICA account"
+      required: true
+      selector:
+        entity:
+          filter:
+            integration: ica
+            domain: todo
+          exclude_entities:
+            - todo.ica_favorite_articles
+          multiple: false

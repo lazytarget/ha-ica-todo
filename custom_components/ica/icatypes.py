@@ -1,4 +1,4 @@
-from typing import TypedDict, Generic, TypeVar, Any
+from typing import Any, Generic, TypedDict, TypeVar
 
 from .utils import try_parse_int
 
@@ -541,6 +541,6 @@ class IcaRecipe(TypedDict):
     Portions: int | None
 
 
-class ServiceCallResponse(Generic[_DataT], TypedDict):
+class ServiceCallResponse(TypedDict, Generic[_DataT]):
     success: bool
     data: _DataT | None = None

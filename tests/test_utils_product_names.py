@@ -3,7 +3,6 @@
 import importlib.util
 import os
 
-
 # Import utils.py directly
 _utils_path = os.path.join(
     os.path.dirname(__file__),
@@ -82,7 +81,8 @@ class TestNormalizeProductName:
         """English -s plural (apple → apples)"""
         assert normalize_product_name("Apples") == "apple"
         assert normalize_product_name("Oranges") == "orange"
-        assert normalize_product_name("Bananas") == "banana"    # currently fails due to the 'ananas' rule, but should ideally be fixed to handle this case better
+        assert normalize_product_name("Bananas") == "banana"
+        assert normalize_product_name("Ananas") == "ananas"
 
     def test_english_es_plural(self):
         """English -es plural (box → boxes)"""

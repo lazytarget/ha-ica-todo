@@ -6,3 +6,5 @@ rules:
     level: warning
   truthy:
     check-keys: false
+ignore: |
+  .venv/

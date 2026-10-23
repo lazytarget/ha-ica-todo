@@ -1,19 +1,28 @@
 """Local storage for cached ICA data."""
 
-from pathlib import Path
 import asyncio
+import datetime as dt
 import json
 import logging
-import datetime as dt
-from typing import Generic, Any, TypeVar, TypedDict
+from pathlib import Path
+from typing import Any, Generic, TypedDict, TypeVar
 
 from homeassistant.core import HomeAssistant
 from homeassistant.util import slugify
+from homeassistant.util.file import WriteError, write_utf8_file_atomic
 
-from .utils import EmptyLogger
 from .const import CACHING_SECONDS_LONG_TERM
+from .utils import EmptyLogger
+
+_LOGGER = logging.getLogger(__name__)
 
 STORAGE_PATH = ".storage/ica.{key}.json"
+
+
+def cache_file_path(hass: HomeAssistant, key: str) -> Path:
+    """Path of the file that persists the cache entry with the given key."""
+    return Path(hass.config.path(STORAGE_PATH.format(key=slugify(key))))
+
 
 _DataT = TypeVar("_DataT", default=dict[str, Any])
 
@@ -28,12 +37,12 @@ class CacheEntry(Generic[_DataT]):
         value_factory,
         expiry_seconds: int = CACHING_SECONDS_LONG_TERM,
         persist_to_file: bool = True,
-        logger: logging.Logger = None,
+        logger: logging.Logger | None = None,
     ) -> None:
-        # Example: CacheEntry(hass, f"{self._config_entry.data[CONF_ICA_ID]}.baseitems")
+        # Example: CacheEntry(hass, f"{config_entry.entry_id}.baseitems")
         self._hass = hass
         self._key = key
-        self._path = Path(self._hass.config.path(STORAGE_PATH.format(key=slugify(key))))
+        self._path = cache_file_path(hass, key)
         self._file: LocalFile | None = None
         self._value: _DataT = None
         self._value_factory = value_factory
@@ -71,7 +80,7 @@ class CacheEntry(Generic[_DataT]):
                 self._value = value
                 self._timestamp = dt.datetime.fromisoformat(
                     info.get("timestamp")
-                ).replace(tzinfo=dt.timezone.utc)
+                ).replace(tzinfo=dt.UTC)
                 self._logger.debug(
                     "Loaded cache entry: %s = %s", self._path, str(self._value)[:100]
                 )
@@ -84,9 +93,9 @@ class CacheEntry(Generic[_DataT]):
 
     async def get_value(self, invalidate_cache: bool | None = None) -> _DataT:
         """Gets value from state, file or API"""
-        now = dt.datetime.now(dt.timezone.utc)
+        now = dt.datetime.now(dt.UTC)
 
-        if self._value is not None and self._file:
+        if self._value is None and self._file:
             await self.init_value()
 
         # Auto invalidate if passed expiry
@@ -116,14 +125,13 @@ class CacheEntry(Generic[_DataT]):
     async def set_value(self, value: _DataT) -> _DataT:
         """Sets the cached value (and persists to file)"""
         self._value = value
-        self._timestamp = dt.datetime.now(dt.timezone.utc)
+        self._timestamp = dt.datetime.now(dt.UTC)
         self._logger.debug(
             "Persisting value in cache entry: %s = %s", self._key, str(value)[:100]
         )
 
         if self._file:
             # Persist new value to file
-            # info = CacheEntryInfo(self._value, self._timestamp)
             info: CacheEntryInfo = {
                 "timestamp": self._timestamp.isoformat(),
                 "key": self._key,
@@ -146,7 +154,7 @@ class LocalFile:
     """Local storage for a single To-do list."""
 
     def __init__(
-        self, hass: HomeAssistant, path: Path, logger: logging.Logger = None
+        self, hass: HomeAssistant, path: Path, logger: logging.Logger | None = None
     ) -> None:
         """Initialize LocalFile."""
         self._hass = hass
@@ -166,7 +174,14 @@ class LocalFile:
     async def async_load_json(self) -> object:
         """Loads the json-file as JSON object"""
         content = await self.async_load()
-        return json.loads(content) if content else None
+        try:
+            return json.loads(content) if content else None
+        except ValueError as err:
+            # E.g. a file truncated by a crash in an earlier version. Refetch instead.
+            self._logger.warning(
+                "Ignoring corrupt cache file '%s': %s", self._path, err
+            )
+            return None
 
     def _load(self) -> str:
         """Load the json-file from disk."""
@@ -174,8 +189,12 @@ class LocalFile:
 
     async def async_store(self, content: str) -> None:
         """Persist string content to file on disk."""
-        async with self._lock:
-            await self._hass.async_add_executor_job(self._store, content)
+        try:
+            async with self._lock:
+                await self._hass.async_add_executor_job(self._store, content)
+        except (OSError, WriteError) as err:
+            # The value is still cached in memory, only the restart cache is lost
+            _LOGGER.warning("Failed to write cache file '%s': %s", self._path, err)
 
     async def async_store_json(self, obj: object) -> None:
         """Persist JSON object as string content to file on disk."""
@@ -183,5 +202,6 @@ class LocalFile:
         await self.async_store(content)
 
     def _store(self, content: str) -> None:
-        """Persist string to file on disk."""
-        self._path.write_text(content)
+        """Persist string to file on disk, atomically so a crash can't corrupt it."""
+        self._path.parent.mkdir(parents=True, exist_ok=True)
+        write_utf8_file_atomic(str(self._path), content, private=True)

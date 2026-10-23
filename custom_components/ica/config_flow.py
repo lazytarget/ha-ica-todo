@@ -1,244 +1,247 @@
 """Config flow for ICA integration."""
 
-from http import HTTPStatus
+from __future__ import annotations
+
 import logging
+from collections.abc import Mapping
 from typing import Any
 
-from requests.exceptions import HTTPError
+import requests
 import voluptuous as vol
-
-from homeassistant import config_entries
 from homeassistant.config_entries import (
     ConfigEntry,
+    ConfigFlow,
+    ConfigFlowResult,
     OptionsFlow,
 )
-from homeassistant.core import callback
 from homeassistant.const import CONF_SCAN_INTERVAL
-from homeassistant.data_entry_flow import FlowResult
+from homeassistant.core import callback
 from homeassistant.helpers import selector
 
-from .coordinator import IcaCoordinator
-from .icatypes import AuthCredentials
-from .icaapi_async import IcaAPIAsync
 from .const import (
+    CONF_AUTH_STATE,
     CONF_DIRTY_CACHE,
-    DOMAIN,
-    CONFIG_ENTRY_NAME,
     CONF_ICA_ID,
     CONF_ICA_PIN,
-    CONF_SHOPPING_LISTS,
     CONF_JSON_DATA_IN_DESC,
+    CONF_SHOPPING_LISTS,
+    CONFIG_ENTRY_NAME,
     DEFAULT_SCAN_INTERVAL,
+    DOMAIN,
+    account_unique_id,
 )
+from .exceptions import IcaAuthError
+from .icaapi_async import IcaAPIAsync
+from .icatypes import AuthCredentials, AuthState
 
 _LOGGER = logging.getLogger(__name__)
 
 
 STEP_USER_DATA_SCHEMA = vol.Schema(
     {
-        vol.Required(CONF_ICA_ID, description="user id (personal ID number)"): str,
-        vol.Required(CONF_ICA_PIN, description="pin code"): str,
-        vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): int,
+        vol.Required(CONF_ICA_ID): str,
+        vol.Required(CONF_ICA_PIN): str,
+        vol.Required(CONF_SCAN_INTERVAL, default=DEFAULT_SCAN_INTERVAL): vol.All(
+            int, vol.Range(min=1)
+        ),
     }
 )
 
+STEP_REAUTH_DATA_SCHEMA = vol.Schema({vol.Required(CONF_ICA_PIN): str})
 
-class IcaConfigFlow(config_entries.ConfigFlow, domain=DOMAIN):
+
+async def _async_login(personal_id: str, pin: str) -> tuple[AuthState, Any]:
+    """Log in to ICA. Returns the auth state and the account's shopping lists."""
+    api = IcaAPIAsync(AuthCredentials(username=personal_id, password=pin), None)
+    await api.ensure_login()
+    shopping_lists = await api.get_shopping_lists()
+    return api.get_authenticated_user(), shopping_lists
+
+
+def _login_error(err: Exception) -> str:
+    if isinstance(err, IcaAuthError):
+        return "invalid_auth"
+    if isinstance(err, requests.exceptions.RequestException):
+        response = getattr(err, "response", None)
+        if response is not None and response.status_code == 401:
+            return "invalid_auth"
+        return "cannot_connect"
+    return "unknown"
+
+
+class IcaConfigFlow(ConfigFlow, domain=DOMAIN):
     """Handle a config flow for ICA."""
 
     VERSION = 1
-    MINOR_VERSION = 2
-
-    initial_input = None
-    auth_state = None
-    shopping_lists = None
-
-    SHOPPING_LIST_SELECTOR_SCHEMA = None
+    MINOR_VERSION = 3
 
     async def async_step_user(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
-        self.initial_input = user_input
-
         if self._async_current_entries():
             return self.async_abort(reason="single_instance_allowed")
 
         errors: dict[str, str] = {}
         if user_input is not None:
-            # Assign unique id based on Account ID
-            await self.async_set_unique_id(f"{DOMAIN}__{user_input[CONF_ICA_ID]}")
-            # Abort flow if a config entry with same Accound ID exists (prevent duplicate requests...)
+            personal_id = user_input[CONF_ICA_ID].strip()
+            await self.async_set_unique_id(account_unique_id(personal_id))
             self._abort_if_unique_id_configured()
 
-            credentials = AuthCredentials(
-                {
-                    "username": user_input[CONF_ICA_ID],
-                    "password": user_input[CONF_ICA_PIN],
-                }
-            )
-
-            api = IcaAPIAsync(credentials, auth_state=None)
             try:
-                await api.ensure_login()
-                self.shopping_lists = await api.get_shopping_lists()
-                self.auth_state = api.get_authenticated_user()
-            except HTTPError as err:
-                if err.response.status_code == HTTPStatus.UNAUTHORIZED:
-                    errors["base"] = "invalid_credentials"
-                else:
-                    errors["base"] = "cannot_connect"
-                _LOGGER.exception("HttpError %s", err, exc_info=True)
-            except Exception:  # pylint: disable=broad-except
-                _LOGGER.exception("Unexpected exception")
-                errors["base"] = "unknown"
-            else:
-                config_entry_data = {
-                    CONF_ICA_ID: user_input[CONF_ICA_ID]
-                    or self.initial_input[CONF_ICA_ID],
-                    CONF_ICA_PIN: user_input[CONF_ICA_PIN]
-                    or self.initial_input[CONF_ICA_PIN],
-                    CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL]
-                    or self.initial_input[CONF_SCAN_INTERVAL],
-                    "auth_state": self.auth_state,
-                }
-                config_entry_name = CONFIG_ENTRY_NAME % (
-                    self.auth_state["user"].person_name
-                    if self.auth_state.get("user", None)
-                    else config_entry_data[CONF_ICA_ID]
+                auth_state, _ = await _async_login(
+                    personal_id, user_input[CONF_ICA_PIN]
                 )
+            except Exception as err:
+                errors["base"] = _login_error(err)
+                if errors["base"] == "unknown":
+                    _LOGGER.exception("Unexpected exception during ICA login")
+            else:
+                user = auth_state.get("user")
                 return self.async_create_entry(
-                    title=config_entry_name,
-                    data=config_entry_data,
+                    title=CONFIG_ENTRY_NAME
+                    % (user["person_name"] if user else "account"),
+                    data={
+                        CONF_ICA_ID: personal_id,
+                        CONF_ICA_PIN: user_input[CONF_ICA_PIN],
+                        CONF_AUTH_STATE: auth_state,
+                    },
+                    options={CONF_SCAN_INTERVAL: user_input[CONF_SCAN_INTERVAL]},
                 )
 
         return self.async_show_form(
             step_id="user",
-            data_schema=STEP_USER_DATA_SCHEMA,
+            data_schema=self.add_suggested_values_to_schema(
+                STEP_USER_DATA_SCHEMA, user_input
+            ),
+            errors=errors,
+        )
+
+    async def async_step_reauth(
+        self, entry_data: Mapping[str, Any]
+    ) -> ConfigFlowResult:
+        """Start a reauth flow when the stored credentials stopped working."""
+        return await self.async_step_reauth_confirm()
+
+    async def async_step_reauth_confirm(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Ask for a new PIN."""
+        entry = self._get_reauth_entry()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            try:
+                auth_state, _ = await _async_login(
+                    entry.data[CONF_ICA_ID], user_input[CONF_ICA_PIN]
+                )
+            except Exception as err:
+                errors["base"] = _login_error(err)
+                if errors["base"] == "unknown":
+                    _LOGGER.exception("Unexpected exception during ICA login")
+            else:
+                return self.async_update_reload_and_abort(
+                    entry,
+                    data_updates={
+                        CONF_ICA_PIN: user_input[CONF_ICA_PIN],
+                        CONF_AUTH_STATE: auth_state,
+                    },
+                )
+
+        return self.async_show_form(
+            step_id="reauth_confirm",
+            data_schema=STEP_REAUTH_DATA_SCHEMA,
+            description_placeholders={"account": entry.title},
             errors=errors,
         )
 
     @staticmethod
     @callback
-    def async_get_options_flow(
-        config_entry: ConfigEntry,
-    ) -> OptionsFlow:
+    def async_get_options_flow(config_entry: ConfigEntry) -> OptionsFlow:
         """Create the options flow."""
-        return IcaOptionsFlowHandler(config_entry)
+        return IcaOptionsFlowHandler()
 
 
 class IcaOptionsFlowHandler(OptionsFlow):
     """Handle an options flow for ICA."""
 
-    shopping_lists = None
-
-    SHOPPING_LIST_SELECTOR_SCHEMA = None
-
-    def __init__(self, config_entry: ConfigEntry) -> None:
+    def __init__(self) -> None:
         """Initialize Ica options flow"""
-        # pylint: disable=W0613 unused-argument
-        super().__init__()
+        self._shopping_lists: list[dict] | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
-    ) -> FlowResult:
+    ) -> ConfigFlowResult:
         """Handle the initial step."""
-        errors: dict[str, str] = {}
-        _LOGGER.debug("Options flow - data: %s", self.config_entry.data)
+        options = dict(self.config_entry.options)
 
-        config_entry_data = self.config_entry.data.copy()
-
-        # Handle input
         if user_input is not None:
-            require_cache_invalidation = config_entry_data.get(CONF_DIRTY_CACHE, False)
-
-            config_entry_data[CONF_SCAN_INTERVAL] = user_input.get(
-                CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-            )
-            config_entry_data[CONF_JSON_DATA_IN_DESC] = user_input.get(
-                CONF_JSON_DATA_IN_DESC, False
-            )
-
-            pre = config_entry_data.get(CONF_SHOPPING_LISTS, []).copy()
-            config_entry_data[CONF_SHOPPING_LISTS] = user_input.get(
-                CONF_SHOPPING_LISTS, []
-            )
-            post = config_entry_data.get(CONF_SHOPPING_LISTS, [])
-            require_cache_invalidation = require_cache_invalidation or (pre != post)
-
-            config_entry_data[CONF_DIRTY_CACHE] = require_cache_invalidation
-
-            if self.hass.config_entries.async_update_entry(
-                self.config_entry,
-                data=config_entry_data,
-            ):
-                _LOGGER.debug("Options flow - new entry data %s", config_entry_data)
-                self.hass.config_entries.async_schedule_reload(
-                    self.config_entry.entry_id
+            tracked_before = list(options.get(CONF_SHOPPING_LISTS) or [])
+            options.update(user_input)
+            options.setdefault(CONF_SHOPPING_LISTS, [])
+            if tracked_before != options[CONF_SHOPPING_LISTS]:
+                # Other lists are tracked, so refetch them after the reload
+                self.hass.config_entries.async_update_entry(
+                    self.config_entry,
+                    data={**self.config_entry.data, CONF_DIRTY_CACHE: True},
                 )
-            return self.async_abort(reason="Integration was reloaded")
+            # Saving the options reloads the integration (see `_async_options_updated`)
+            return self.async_create_entry(data=options)
 
-        # Build dynamic schemas
-        coordinator: IcaCoordinator = self.config_entry.coordinator
-        await self._ensure_dynamic_schemas_are_built(coordinator)
+        errors: dict[str, str] = {}
+        if self._shopping_lists is None:
+            try:
+                self._shopping_lists = await self._async_get_shopping_lists()
+            except Exception as err:  # noqa: BLE001
+                _LOGGER.warning("Could not fetch the ICA shopping lists: %s", err)
+                errors["base"] = "cannot_connect"
 
-        # Format form schema
         schema = vol.Schema(
             {
                 vol.Required(
                     CONF_SCAN_INTERVAL,
-                    default=config_entry_data.get(
-                        CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL
-                    ),
-                ): int,
+                    default=options.get(CONF_SCAN_INTERVAL, DEFAULT_SCAN_INTERVAL),
+                ): vol.All(int, vol.Range(min=1)),
                 vol.Required(
                     CONF_JSON_DATA_IN_DESC,
-                    default=config_entry_data.get(CONF_JSON_DATA_IN_DESC, False),
-                    description="Whether to write extra information as JSON in the description field",
+                    default=options.get(CONF_JSON_DATA_IN_DESC, False),
                 ): bool,
+                # Without the lists from ICA, the tracked lists are left unchanged
+                **(
+                    self._shopping_list_selector_schema(self._shopping_lists)
+                    if self._shopping_lists
+                    else {}
+                ),
             }
-        ).extend(self.SHOPPING_LIST_SELECTOR_SCHEMA or {})
-
-        return self.async_show_form(
-            step_id="init",
-            data_schema=schema,
-            errors=errors,
         )
 
-    async def _ensure_data_is_loaded_for_dynamic_schemas(
-        self, coordinator: IcaCoordinator
-    ):
-        if not self.shopping_lists:
-            # Re-uses the coordinator on the config_entry for communicating with ICA api
-            # Therefore no need to instantiate and authenticate a API new instance
-            # Get shopping_lists directly from API as it will not limit the chosen shopping lists
-            data = await coordinator.api.get_shopping_lists()
-            if data and "shoppingLists" in data:
-                y = data["shoppingLists"]
-                lists = [z for z in y if z["offlineId"] and z["title"]]
-                self.shopping_lists = lists
+        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
 
-    async def _ensure_dynamic_schemas_are_built(self, coordinator: IcaCoordinator):
-        # Shopping list selector
-        if not self.SHOPPING_LIST_SELECTOR_SCHEMA:
-            await self._ensure_data_is_loaded_for_dynamic_schemas(coordinator)
-            self.SHOPPING_LIST_SELECTOR_SCHEMA = (
-                self._build_shopping_list_selector_schema(self.shopping_lists)
-            )
+    async def _async_get_shopping_lists(self) -> list[dict]:
+        # Re-uses the API client of the loaded entry, which is already logged in.
+        # Fetches all lists of the account, not only the tracked ones.
+        coordinator = self.config_entry.runtime_data
+        data = await coordinator.api.get_shopping_lists()
+        lists = (data or {}).get("shoppingLists") or []
+        return [x for x in lists if x.get("offlineId") and x.get("title")]
 
-    def _build_shopping_list_selector_schema(self, lists):
+    def _shopping_list_selector_schema(self, lists: list[dict]) -> dict:
+        # Match tracked ids to the available lists case-insensitively (ICA returns
+        # upper case ids) and drop ids of lists that no longer exist
+        available = {str(x["offlineId"]).lower(): x["offlineId"] for x in lists}
+        tracked = [
+            available[str(x).lower()]
+            for x in self.config_entry.options.get(CONF_SHOPPING_LISTS) or []
+            if str(x).lower() in available
+        ]
         return {
-            vol.Optional(
-                CONF_SHOPPING_LISTS,
-                description="The shopping lists to track",
-                default=self.config_entry.data.get(CONF_SHOPPING_LISTS, []),
-            ): selector.SelectSelector(
+            vol.Optional(CONF_SHOPPING_LISTS, default=tracked): selector.SelectSelector(
                 selector.SelectSelectorConfig(
                     options=[
                         selector.SelectOptionDict(
-                            label=list["title"], value=list["offlineId"]
+                            label=shopping_list["title"],
+                            value=shopping_list["offlineId"],
                         )
-                        for list in lists
+                        for shopping_list in lists
                     ],
                     mode=selector.SelectSelectorMode.DROPDOWN,
                     multiple=True,

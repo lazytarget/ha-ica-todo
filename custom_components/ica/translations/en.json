@@ -1,152 +1,188 @@
 {
   "config": {
-      "step": {
-        "user": {
-          "data": {
-            "personal_id": "Personal ID number",
-            "pin_code": "ICA PIN code",
-            "recipe_count": "Number of random recipes"
-          },
-          "data_description":
-          {
-            "personal_id": "10 digits, no hyphen",
-            "pin_code": "4-6 numbers, used to be found at the back of your ICA Buffe magazine",
-            "recipe_count": "0 deactivates"
-          }
+    "step": {
+      "user": {
+        "description": "Log in with the same personal ID number and PIN as in the ICA app.",
+        "data": {
+          "personal_id": "Personal ID number",
+          "pin_code": "ICA PIN code",
+          "scan_interval": "Update interval (minutes)"
+        },
+        "data_description": {
+          "personal_id": "10 or 12 digits, no hyphen",
+          "pin_code": "4-6 digits",
+          "scan_interval": "How often to fetch data from ICA"
         }
       },
-      "error": {
-        "cannot_connect": "[%key:common::config_flow::error::cannot_connect%]",
-        "invalid_credentials": "[%key:common::config_flow::error::invalid_credentials%]",
-        "unknown": "[%key:common::config_flow::error::unknown%]"
-      },
-      "abort": {
-        "single_instance_allowed": "[%key:common::config_flow::abort::single_instance_allowed%]"
-      },
-      "create_entry": {
-        "default": "[%key:common::config_flow::create_entry::authenticated%]"
-      }
-    },
-    "options": {
-      "step": {
-        "init": {
-          "data": {
-            "shopping_lists": "Shopping lists"
-          },
-          "data_description": {
-            "shopping_lists": "The shopping lists to track"
-          }
+      "reauth_confirm": {
+        "title": "Log in to ICA again",
+        "description": "The login for {account} stopped working. Enter your ICA PIN code.",
+        "data": {
+          "pin_code": "ICA PIN code"
         }
       }
     },
-    "services": {
-      "get_recipe": {
-        "name": "Get recipe",
-        "description": "Gets a ICA recipe",
-        "fields": {
-          "recipe_id": {
-            "name": "Recipe id",
-            "description": "The id of the recipe to retrieve"
-          }
+    "error": {
+      "cannot_connect": "Failed to connect",
+      "invalid_auth": "Invalid personal ID number or PIN",
+      "unknown": "Unexpected error"
+    },
+    "abort": {
+      "single_instance_allowed": "Already configured. Only a single configuration possible.",
+      "already_configured": "Account is already configured",
+      "reauth_successful": "Re-authentication was successful"
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "data": {
+          "scan_interval": "Update interval (minutes)",
+          "json_data_in_desc": "JSON data in description",
+          "shopping_lists": "Shopping lists"
+        },
+        "data_description": {
+          "scan_interval": "How often to fetch data from ICA",
+          "json_data_in_desc": "Show extra item data (quantity, offer, EAN, ...) as JSON in each item's description",
+          "shopping_lists": "The shopping lists to track as to-do lists"
         }
-      },
-      "lookup_product": {
-        "name": "Get product",
-        "description": "Gets information about a Product",
-        "fields": {
-          "identifier": {
-            "name": "Identifier",
-            "description": "EAN/gtin/Barcode"
-          }
+      }
+    },
+    "error": {
+      "cannot_connect": "Could not fetch the shopping lists from ICA, the tracked lists can't be changed right now"
+    }
+  },
+  "entity": {
+    "todo": {
+      "baseitems": {
+        "name": "Favorite articles"
+      }
+    }
+  },
+  "exceptions": {
+    "not_loaded": {
+      "message": "{target} is not loaded"
+    },
+    "integration_not_found": {
+      "message": "ICA account {target} was not found"
+    }
+  },
+  "services": {
+    "refresh_all": {
+      "name": "Refresh all",
+      "description": "Fetches all data from ICA again, ignoring the cache"
+    },
+    "get_recipe": {
+      "name": "Get recipe",
+      "description": "Gets an ICA recipe",
+      "fields": {
+        "recipe_id": {
+          "name": "Recipe ID",
+          "description": "The ID of the recipe to retrieve"
         }
-      },
-      "get_baseitems": {
-        "name": "Get favorite items",
-        "description": "Gets the favorite items (a.k.a baseitems) for the user",
-        "fields": {
-          "integration": {
-            "name": "ICA Account",
-            "description": "The config account to look within"
-          }
+      }
+    },
+    "lookup_product": {
+      "name": "Look up product",
+      "description": "Gets information about a product",
+      "fields": {
+        "identifier": {
+          "name": "Barcode",
+          "description": "EAN/GTIN/barcode"
         }
-      },
-      "add_baseitem": {
-        "name": "Add a favorite item",
-        "description": "Adds a new favorite item to ICA's list of baseitems for the user",
-        "fields": {
-          "integration": {
-            "name": "ICA Account",
-            "description": "The config account to look within"
-          },
-          "identifier": {
-            "name": "Identifier",
-            "description": "Name / Barcode of the item to add"
-          }
+      }
+    },
+    "get_baseitems": {
+      "name": "Get favorite items",
+      "description": "Gets the favorite items (baseitems) of the account",
+      "fields": {
+        "integration": {
+          "name": "ICA account",
+          "description": "The ICA account to use"
         }
-      },
-      "add_offers_to_shopping_list": {
-        "name": "Adds offer(s) to shopping list",
-        "description": "Adds a current offer to a shopping list",
-        "fields": {
-          "offer_ids": {
-            "name": "OfferIds",
-            "description": "The offer id(s) to add to a shopping list"
-          },
-          "conflict_mode": {
-            "name": "Conflict mode",
-            "description": "What do to if the item already exists"
-          }
+      }
+    },
+    "add_baseitem": {
+      "name": "Add favorite item",
+      "description": "Adds a favorite item to the account",
+      "fields": {
+        "integration": {
+          "name": "ICA account",
+          "description": "The ICA account to use"
+        },
+        "identifier": {
+          "name": "Name / barcode",
+          "description": "Either a free text name or a barcode"
         }
-      },
-      "new_task": {
-        "name": "New task",
-        "description": "Creates a new task and add it to a project.",
-        "fields": {
-          "content": {
-            "name": "Content",
-            "description": "The name of the task."
-          },
-          "project": {
-            "name": "Project",
-            "description": "The name of the project this task should belong to."
-          },
-          "labels": {
-            "name": "Labels",
-            "description": "Any labels that you want to apply to this task, separated by a comma."
-          },
-          "assignee": {
-            "name": "Assignee",
-            "description": "A members username of a shared project to assign this task to."
-          },
-          "priority": {
-            "name": "Priority",
-            "description": "The priority of this task, from 1 (normal) to 4 (urgent)."
-          },
-          "due_date_string": {
-            "name": "Due date string",
-            "description": "The day this task is due, in natural language."
-          },
-          "due_date_lang": {
-            "name": "Due date language",
-            "description": "The language of due_date_string."
-          },
-          "due_date": {
-            "name": "Due date",
-            "description": "The time this task is due, in format YYYY-MM-DD or YYYY-MM-DDTHH:MM:SS, in UTC timezone."
-          },
-          "reminder_date_string": {
-            "name": "Reminder date string",
-            "description": "When should user be reminded of this task, in natural language."
-          },
-          "reminder_date_lang": {
-            "name": "Reminder data language",
-            "description": "The language of reminder_date_string."
-          },
-          "reminder_date": {
-            "name": "Reminder date",
-            "description": "When should user be reminded of this task, in format YYYY-MM-DDTHH:MM:SS, in UTC timezone."
-          }
+      }
+    },
+    "upsert_shopping_list": {
+      "name": "Add or update rows",
+      "description": "Adds or updates rows in a shopping list",
+      "fields": {
+        "entity_id": {
+          "name": "Shopping list",
+          "description": "The ICA shopping list"
+        },
+        "rows": {
+          "name": "Rows",
+          "description": "The rows to add or update, as text (e.g. '2 st Gurka') or JSON objects"
+        },
+        "conflict_mode": {
+          "name": "Conflict mode",
+          "description": "What to do if the item already exists: APPEND adds a new row, MERGE sums the quantities, IGNORE keeps the existing row"
+        }
+      }
+    },
+    "add_offers_to_shopping_list": {
+      "name": "Add offers to shopping list",
+      "description": "Adds current offers to a shopping list",
+      "fields": {
+        "entity_id": {
+          "name": "Shopping list",
+          "description": "The ICA shopping list"
+        },
+        "offer_ids": {
+          "name": "Offer IDs",
+          "description": "The offer ID(s) to add"
+        },
+        "conflict_mode": {
+          "name": "Conflict mode",
+          "description": "What to do if the item already exists: APPEND adds a new row, MERGE sums the quantities, IGNORE keeps the existing row"
+        }
+      }
+    },
+    "create_shopping_list": {
+      "name": "Create shopping list",
+      "description": "Creates a new shopping list in your ICA account and optionally tracks it as a to-do list",
+      "fields": {
+        "integration": {
+          "name": "ICA account",
+          "description": "The ICA account to use"
+        },
+        "title": {
+          "name": "Title",
+          "description": "Name of the new shopping list"
+        },
+        "comment": {
+          "name": "Comment",
+          "description": "Optional comment on the list"
+        },
+        "track": {
+          "name": "Track in Home Assistant",
+          "description": "Add the new list as a to-do entity (reloads the integration)"
+        }
+      }
+    },
+    "delete_shopping_list": {
+      "name": "Delete shopping list",
+      "description": "Permanently deletes a shopping list from your ICA account and removes it from Home Assistant",
+      "fields": {
+        "entity_id": {
+          "name": "Shopping list",
+          "description": "The ICA shopping list"
         }
       }
     }
   }
+}

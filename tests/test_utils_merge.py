@@ -258,11 +258,11 @@ class TestMergeShoppingListEntries:
         assert result["unit"] == "g"
 
     def test_base_none_quantity_other_none_unit(self):
-        """Other has quantity but no unit → defaults to 'st'."""
+        """A missing quantity counts as 1 st, so 1 st + 2 st = 3 st."""
         base = {"productName": "Salt", "quantity": None, "unit": None}
         other = {"productName": "Salt", "quantity": 2, "unit": None}
         result = merge_shopping_list_entries(base, other)
-        assert result["quantity"] == 2
+        assert result["quantity"] == 3
         assert result["unit"] == "st"  # defaulted
 
     def test_other_none_quantity(self):
@@ -273,11 +273,19 @@ class TestMergeShoppingListEntries:
         assert result["unit"] == "g"
 
     def test_both_none_quantity(self):
+        """Adding an item without quantity twice gives 2 st."""
         base = {"productName": "Salt", "quantity": None, "unit": None}
         other = {"productName": "Salt", "quantity": None, "unit": None}
         result = merge_shopping_list_entries(base, other)
-        assert result["quantity"] is None
-        assert result["unit"] is None
+        assert result["quantity"] == 2
+        assert result["unit"] == "st"
+
+    def test_base_none_quantity_incompatible_other_keeps_base(self):
+        base = {"productName": "Smör", "quantity": 1, "unit": "förp"}
+        other = {"productName": "Smör", "quantity": None, "unit": None}
+        result = merge_shopping_list_entries(base, other)
+        assert result["quantity"] == 1
+        assert result["unit"] == "förp"
 
     def test_no_unit_both_have_quantity(self):
         """Both entries have quantity but no explicit unit – defaults to 'st', so they sum."""
