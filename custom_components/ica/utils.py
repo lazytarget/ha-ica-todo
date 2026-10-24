@@ -1,5 +1,6 @@
 import logging
 import json
+from datetime import datetime
 from typing import Any, TypeVar
 
 _DataT = TypeVar("_DataT", default=dict[Any, Any])
@@ -484,6 +485,81 @@ def merge_shopping_list_entries(base: dict, other: dict) -> dict:
             result[field] = other[field]
 
     return result
+
+
+# ---------------------------------------------------------------------------
+# Change detection and matching used for automation events/services
+# ---------------------------------------------------------------------------
+
+
+def get_shopping_list_item_changes(
+    old_rows: list[dict] | None, new_rows: list[dict] | None
+) -> dict[str, list[dict]]:
+    """Group the row changes between two snapshots of a shopping list.
+
+    Rows are matched on 'offlineId'. Returns the keys 'added', 'removed',
+    'completed' and 'reopened', each with the affected rows (the new version
+    of the row, or the old version if it was removed).
+    """
+    old = {r["offlineId"].casefold(): r for r in old_rows or [] if r.get("offlineId")}
+    new = {r["offlineId"].casefold(): r for r in new_rows or [] if r.get("offlineId")}
+
+    changes: dict[str, list[dict]] = {
+        "added": [],
+        "removed": [row for offline_id, row in old.items() if offline_id not in new],
+        "completed": [],
+        "reopened": [],
+    }
+    for offline_id, row in new.items():
+        old_row = old.get(offline_id)
+        if old_row is None:
+            changes["added"].append(row)
+        elif row.get("isStrikedOver") and not old_row.get("isStrikedOver"):
+            changes["completed"].append(row)
+        elif not row.get("isStrikedOver") and old_row.get("isStrikedOver"):
+            changes["reopened"].append(row)
+    return changes
+
+
+def match_offers_to_baseitems(
+    offers: list[dict] | None, baseitems: list[dict] | None
+) -> list[dict]:
+    """Return the offers that match any of the favorite items (baseitems).
+
+    A favorite with an EAN matches offers that include that EAN (ignoring
+    leading zeros). A favorite without an EAN matches on its name against the
+    offer name or the article names of the offer, accounting for plurals.
+    """
+    eans: set[str] = set()
+    names: set[str] = set()
+    for item in baseitems or []:
+        if ean := item.get("articleEan"):
+            eans.add(str(ean).lstrip("0"))
+        elif text := item.get("text"):
+            names.add(normalize_product_name(text))
+    eans.discard("")
+    names.discard("")
+    if not eans and not names:
+        return []
+
+    def is_match(offer: dict) -> bool:
+        for ean in offer.get("eans") or []:
+            if str(ean.get("id") or "").lstrip("0") in eans:
+                return True
+            if normalize_product_name(ean.get("articleDescription")) in names:
+                return True
+        return normalize_product_name(offer.get("name")) in names
+
+    return [offer for offer in offers or [] if is_match(offer)]
+
+
+def is_offer_valid(offer: dict, now: datetime) -> bool:
+    """Whether the offer is valid at the given (naive, local) time."""
+    valid_from = offer.get("validFrom")
+    valid_to = offer.get("validTo")
+    started = not valid_from or datetime.fromisoformat(valid_from) <= now
+    ended = bool(valid_to) and datetime.fromisoformat(valid_to) < now
+    return started and not ended
 
 
 if __name__ == "__main__":

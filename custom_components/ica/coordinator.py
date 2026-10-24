@@ -12,6 +12,7 @@ import requests
 import homeassistant.util.dt as dt_util
 from homeassistant.config_entries import ConfigEntry
 from homeassistant.core import HomeAssistant
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers.update_coordinator import DataUpdateCoordinator, UpdateFailed
 from homeassistant.helpers.aiohttp_client import async_get_clientsession
 
@@ -24,7 +25,9 @@ from .const import (
     CONF_SHOPPING_LISTS,
     DEFAULT_ARTICLE_GROUP_ID,
     DOMAIN,
+    SHOPPING_LIST_ITEM_EVENTS,
     ConflictMode,
+    IcaEventOrigin,
     IcaEvents,
     OpenFoodFacts,
 )
@@ -49,7 +52,16 @@ from .icatypes import (
     IcaStoreOffer,
     OpenFoodFactsProduct,
 )
-from .utils import get_diff_obj, get_diffs, index_of, trim_props, try_parse_int
+from .utils import (
+    get_diff_obj,
+    get_diffs,
+    get_shopping_list_item_changes,
+    index_of,
+    is_offer_valid,
+    match_offers_to_baseitems,
+    trim_props,
+    try_parse_int,
+)
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -86,6 +98,11 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
         # config_entry.async_on_unload(self._openFoodFactsSession.close)
 
         config_entry_key = self._config_entry.data[CONF_ICA_ID]
+        # Expire just before the next scheduled update, so that every update fetches
+        # fresh data. Otherwise an update can land right before expiry and skip it.
+        short_term_expiry = min(
+            CACHING_SECONDS_SHORT_TERM, max(update_interval.total_seconds() - 30, 0)
+        )
 
         self._ica_articles = CacheEntry[list[IcaArticle]](
             hass, "articles", partial(self.api.get_articles)
@@ -94,7 +111,7 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
             hass,
             f"{config_entry_key}.baseitems",
             partial(self.api.get_baseitems),
-            expiry_seconds=CACHING_SECONDS_SHORT_TERM,
+            expiry_seconds=short_term_expiry,
         )
         self._ica_current_bonus = CacheEntry[IcaAccountCurrentBonus](
             hass, f"{config_entry_key}.current_bonus", partial(self._get_current_bonus)
@@ -108,7 +125,7 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
             hass,
             f"{config_entry_key}.shopping_lists",
             partial(self._async_update_tracked_shopping_lists),
-            expiry_seconds=CACHING_SECONDS_SHORT_TERM,
+            expiry_seconds=short_term_expiry,
         )
         self._ica_offers = CacheEntry[dict[str, IcaOfferDetails]](
             hass,
@@ -172,6 +189,13 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
             # Updated Shopping list cache outside of regular `_async_update_data-loop`, inform listeners...
             self.async_update_listeners()
         return selected_lists
+
+    async def async_refresh_shopping_lists(self) -> list[IcaShoppingList]:
+        """Fetch the tracked shopping lists from ICA right away, bypassing the cache."""
+        if self.should_refresh_login():
+            new_auth_state = await self.api.ensure_login(refresh=True)
+            self._try_persist_new_state(self._config_entry, new_auth_state, None)
+        return await self.async_get_shopping_lists(invalidate_cache=True)
 
     def get_article_group(self, product_name) -> int:
         articles = self._ica_articles.current_value() or []
@@ -377,6 +401,19 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
                 self._hass, "offers_changed--new-offers", partial(lambda _: None)
             ).set_value(event_data)
 
+            # Notify new offers on the user's favorite items
+            if favorite_offers := match_offers_to_baseitems(
+                new_offers, self._ica_baseitems.current_value()
+            ):
+                await self._worker.fire_or_queue_event(
+                    IcaEvents.FAVORITE_OFFERS,
+                    {
+                        "config_entry_id": self._config_entry.entry_id,
+                        "offer_ids": [o["id"] for o in favorite_offers],
+                        "offers": favorite_offers,
+                    },
+                )
+
         _LOGGER.warning(
             "Updated offer details! pre_count: %s, post_count: %s",
             pre_count,
@@ -568,8 +605,14 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
         for shopping_list in updated or []:
             old_rows = next(
                 (lst["rows"] for lst in current if lst["id"] == shopping_list["id"]),
-                [],
+                None,
             )
+            if old_rows is not None:
+                # Skip on the first fetch of a list, as every row would count as added
+                await self._fire_shopping_list_events(
+                    shopping_list, old_rows, IcaEventOrigin.ICA
+                )
+            old_rows = old_rows or []
             new_rows = shopping_list["rows"]
             if diffs := get_diffs(old_rows, new_rows):
                 await self._worker.fire_or_queue_event(
@@ -610,6 +653,9 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
         state = self._ica_shopping_lists.current_value().copy()
         index = index_of(state, "offlineId", updated_list["offlineId"])
         if index >= 0:
+            await self._fire_shopping_list_events(
+                updated_list, state[index]["rows"], IcaEventOrigin.HOME_ASSISTANT
+            )
             state[index] = updated_list
             await self._ica_shopping_lists.set_value(state)
             _LOGGER.info("Dynamically updated Shopping list cache")
@@ -623,6 +669,65 @@ class IcaCoordinator(DataUpdateCoordinator[list[IcaShoppingListEntry]]):
                 "Could not dynamically update Shopping List cache. Updated via API instead..."
             )
         return updated_list
+
+    async def _fire_shopping_list_events(
+        self,
+        shopping_list: IcaShoppingList,
+        old_rows: list[IcaShoppingListEntry],
+        origin: IcaEventOrigin,
+    ) -> None:
+        """Fires an event per changed row, plus one summarizing the changes."""
+        changes = get_shopping_list_item_changes(old_rows, shopping_list["rows"])
+        if not any(changes.values()):
+            return
+        # Leave out the offer details that the todo entity adds to the cached rows
+        changes = {
+            change: [{k: v for k, v in row.items() if k != "offer"} for row in rows]
+            for change, rows in changes.items()
+        }
+
+        offline_id = shopping_list["offlineId"]
+        base_data = {
+            "config_entry_id": self._config_entry.entry_id,
+            "entity_id": er.async_get(self._hass).async_get_entity_id(
+                "todo", DOMAIN, f"{self._config_entry.entry_id}-{offline_id}"
+            ),
+            "shopping_list_id": offline_id,
+            "shopping_list_name": shopping_list["title"],
+            "origin": origin,
+        }
+        for change, event_type in SHOPPING_LIST_ITEM_EVENTS.items():
+            for row in changes[change]:
+                await self._worker.fire_or_queue_event(
+                    event_type,
+                    {**base_data, "product_name": row.get("productName"), "item": row},
+                )
+        await self._worker.fire_or_queue_event(
+            IcaEvents.SHOPPING_LIST_CHANGED, {**base_data, **changes}
+        )
+
+    async def async_get_offers(
+        self, store_ids: list[int] | None = None, favorites_only: bool = False
+    ) -> list[IcaOfferInfo]:
+        """Return the currently valid offers in the favorite stores."""
+        now = datetime.now()
+        all_offers = await self._ica_offers.get_value() or {}
+        offers = [
+            IcaOfferInfo.map_from_offer_details(o)
+            for o in all_offers.values()
+            if is_offer_valid(o, now)
+        ]
+        if store_ids:
+            offers = [
+                o
+                for o in offers
+                if any(s.get("id") in store_ids for s in o.get("stores") or [])
+            ]
+        if favorites_only:
+            offers = match_offers_to_baseitems(
+                offers, await self._ica_baseitems.get_value()
+            )
+        return sorted(offers, key=lambda o: o.get("validTo") or "")
 
     def get_baseitems(self):
         """Return ICA favorite items (baseitems) fetched at most once."""

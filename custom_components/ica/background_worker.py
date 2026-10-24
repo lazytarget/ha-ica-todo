@@ -88,7 +88,7 @@ class BackgroundWorker:
             event_type,
             len(bytes(str(event_data), "utf-8")),
         )
-        _LOGGER.warning("Event data: %s", str(event_data)[:100])
+        _LOGGER.debug("Event data: %s", str(event_data)[:100])
         self._hass.bus.fire(
             event_type,
             event_data,

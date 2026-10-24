@@ -127,10 +127,34 @@ class IcaServices(StrEnum):
     SEARCH_ARTICLES = "search_articles"
     UPSERT_SHOPPING_LIST = "upsert_shopping_list"
     ADD_OFFERS_TO_SHOPPING_LIST = "add_offers_to_shopping_list"
+    GET_OFFERS = "get_offers"
+    REFRESH_SHOPPING_LISTS = "refresh_shopping_lists"
 
 
 class IcaEvents(StrEnum):
     NEW_OFFERS = f"{DOMAIN}_new_offers"
+    FAVORITE_OFFERS = f"{DOMAIN}_favorite_offers"
+    SHOPPING_LIST_CHANGED = f"{DOMAIN}_shopping_list_changed"
+    SHOPPING_LIST_ITEM_ADDED = f"{DOMAIN}_shopping_list_item_added"
+    SHOPPING_LIST_ITEM_REMOVED = f"{DOMAIN}_shopping_list_item_removed"
+    SHOPPING_LIST_ITEM_COMPLETED = f"{DOMAIN}_shopping_list_item_completed"
+    SHOPPING_LIST_ITEM_REOPENED = f"{DOMAIN}_shopping_list_item_reopened"
+
+
+# Maps the keys from `utils.get_shopping_list_item_changes` to their event
+SHOPPING_LIST_ITEM_EVENTS: Final = {
+    "added": IcaEvents.SHOPPING_LIST_ITEM_ADDED,
+    "removed": IcaEvents.SHOPPING_LIST_ITEM_REMOVED,
+    "completed": IcaEvents.SHOPPING_LIST_ITEM_COMPLETED,
+    "reopened": IcaEvents.SHOPPING_LIST_ITEM_REOPENED,
+}
+
+
+class IcaEventOrigin(StrEnum):
+    """Where a shopping list change was made"""
+
+    ICA = "ica"  # Outside of Home Assistant, e.g. in the ICA app
+    HOME_ASSISTANT = "home_assistant"
 
 
 class API:

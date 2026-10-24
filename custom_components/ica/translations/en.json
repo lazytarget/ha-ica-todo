@@ -40,6 +40,16 @@
       }
     },
     "services": {
+      "refresh_shopping_lists": {
+        "name": "Refresh shopping lists",
+        "description": "Fetches the tracked shopping lists from ICA right away, e.g. to pick up changes made in the ICA app",
+        "fields": {
+          "integration": {
+            "name": "ICA Account",
+            "description": "The ICA account to refresh. Defaults to all accounts"
+          }
+        }
+      },
       "get_recipe": {
         "name": "Get recipe",
         "description": "Gets a ICA recipe",
@@ -98,6 +108,24 @@
           }
         }
       },
+      "get_offers": {
+        "name": "Get offers",
+        "description": "Gets the currently valid offers in the favorite stores",
+        "fields": {
+          "integration": {
+            "name": "ICA Account",
+            "description": "The ICA account to get offers for. Defaults to the first account"
+          },
+          "store_ids": {
+            "name": "Store ids",
+            "description": "Only include offers valid in these stores. Leave empty for all favorite stores"
+          },
+          "favorites_only": {
+            "name": "Favorites only",
+            "description": "Only include offers that match the account's favorite items"
+          }
+        }
+      },
       "new_task": {
         "name": "New task",
         "description": "Creates a new task and add it to a project.",
@@ -147,6 +175,14 @@
             "description": "When should user be reminded of this task, in format YYYY-MM-DDTHH:MM:SS, in UTC timezone."
           }
         }
+      }
+    },
+    "exceptions": {
+      "integration_not_found": {
+        "message": "No loaded {target} integration was found"
+      },
+      "not_loaded": {
+        "message": "The ICA account {target} is not loaded"
       }
     }
   }
