@@ -273,6 +273,7 @@ _VOLUME_TO_ML: dict[str, float] = {
 # Weight – conversion factors to the base unit (g)
 _WEIGHT_TO_G: dict[str, float] = {
     "kg": 1000.0,
+    "hg": 100.0,  # hektogram
     "g": 1.0,
 }
 
@@ -414,6 +415,25 @@ def _merge_recipe_refs(
     return list(merged.values())
 
 
+def can_merge_quantities(base: dict, other: dict) -> bool:
+    """Whether `other` can be merged into `base` without losing its amount.
+
+    False when `other` has an amount in a unit that cannot be added to the unit
+    of `base` (e.g. "500 g" into "2 st"). A missing unit counts as pieces.
+    """
+    if other.get("quantity") is None and not other.get("unit"):
+        return True  # Nothing explicit to add
+    if (
+        base.get("quantity") is None
+        and other.get("quantity") is not None
+        and other.get("unit")
+    ):
+        return True  # Adopted as is
+    return are_units_compatible(
+        _effective_unit(base.get("unit")), _effective_unit(other.get("unit"))
+    )
+
+
 def merge_shopping_list_entries(base: dict, other: dict) -> dict:
     """Merge two ``IcaShoppingListEntry`` dicts into a new dict.
 
@@ -424,7 +444,9 @@ def merge_shopping_list_entries(base: dict, other: dict) -> dict:
     **quantity / unit**
       Quantities are summed when the units are compatible.  A missing unit
       is treated as ``"st"`` (pieces) so that ``None``-unit entries are never
-      silently mixed with volume or weight entries.
+      silently mixed with volume or weight entries.  With incompatible units
+      the base values are kept; check `can_merge_quantities` first to avoid
+      losing the quantity of *other*.
 
     **recipes**
       Recipe reference lists are combined.  Quantities for the same

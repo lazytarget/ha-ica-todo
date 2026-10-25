@@ -23,6 +23,7 @@ convert_quantity = _utils.convert_quantity
 get_unit_group = _utils.get_unit_group
 merge_shopping_list_entries = _utils.merge_shopping_list_entries
 _merge_recipe_refs = _utils._merge_recipe_refs
+can_merge_quantities = _utils.can_merge_quantities
 
 
 # ---------------------------------------------------------------------------
@@ -433,3 +434,51 @@ class TestMergeShoppingListEntries:
         assert result["productEan"] == "7310860000010"  # base non-None
         assert result["articleGroupId"] == 12
         assert result["articleGroupIdExtended"] == 55  # carried from other
+
+
+class TestHectogram:
+    """`hg` is a unit the summary parser accepts, so it must convert as well."""
+
+    def test_unit_group(self):
+        assert get_unit_group("hg")[0] == "weight"
+
+    def test_convert(self):
+        assert convert_quantity(1, "hg", "g") == 100
+        assert convert_quantity(250, "g", "hg") == 2.5
+        assert convert_quantity(1, "kg", "hg") == 10
+
+    def test_merge_does_not_drop_the_quantity(self):
+        base = {"productName": "Skinka", "quantity": 100, "unit": "g"}
+        other = {"productName": "Skinka", "quantity": 1, "unit": "hg"}
+        result = merge_shopping_list_entries(base, other)
+        assert result["quantity"] == 200
+        assert result["unit"] == "g"
+
+
+class TestCanMergeQuantities:
+    def test_compatible_units(self):
+        base = {"quantity": 100, "unit": "g"}
+        assert can_merge_quantities(base, {"quantity": 1, "unit": "kg"})
+        assert can_merge_quantities(base, {"quantity": 1, "unit": "hg"})
+
+    def test_incompatible_units(self):
+        base = {"quantity": 100, "unit": "g"}
+        assert not can_merge_quantities(base, {"quantity": 1, "unit": "l"})
+        assert not can_merge_quantities(base, {"quantity": 1, "unit": "st"})
+        assert not can_merge_quantities(
+            {"quantity": 2, "unit": "st"}, {"quantity": 500, "unit": "g"}
+        )
+        assert not can_merge_quantities(
+            {"quantity": 2, "unit": "st"}, {"quantity": 1, "unit": "förp"}
+        )
+
+    def test_missing_unit_counts_as_pieces(self):
+        assert can_merge_quantities({"quantity": 2}, {"quantity": 3, "unit": "st"})
+        assert not can_merge_quantities({"quantity": 2}, {"quantity": 3, "unit": "kg"})
+
+    def test_other_without_amount_adds_nothing_so_it_merges(self):
+        assert can_merge_quantities({"quantity": 500, "unit": "g"}, {})
+        assert can_merge_quantities({"quantity": 500, "unit": "g"}, {"quantity": None})
+
+    def test_base_without_amount_adopts_the_other(self):
+        assert can_merge_quantities({}, {"quantity": 500, "unit": "g"})
