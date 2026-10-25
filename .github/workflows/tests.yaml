@@ -27,5 +27,23 @@ jobs:
       - name: "Install requirements-dev"
         run: python3 -m pip install -r requirements-dev.txt
 
-      - name: "pytest"
-        run: python3 -m pytest
+      - name: "pytest with coverage"
+        run: python3 -m pytest --cov --cov-report=xml
+
+      - name: "Coverage summary"
+        if: always()
+        run: |
+          if [ -f .coverage ]; then
+            {
+              echo "### Coverage"
+              python3 -m coverage report --skip-covered --format=markdown
+            } >> "$GITHUB_STEP_SUMMARY"
+          fi
+
+      - name: "Upload coverage report"
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: coverage
+          path: coverage.xml
+          if-no-files-found: ignore
