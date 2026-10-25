@@ -114,3 +114,43 @@ async def test_options_flow_changes_lists_and_reloads(hass, loaded_entry, mock_a
     # The reload refetched the lists and cleared the dirty flag again
     assert loaded_entry.data[CONF_DIRTY_CACHE] is False
     assert hass.states.get("todo.ica_fest") is not None
+
+
+async def test_lists_picked_right_after_setup_get_entities(hass, mock_api):
+    """Issue #42: pick the lists to track a minute after adding the integration.
+
+    Adding the integration tracks no lists, so the (empty) shopping list cache is
+    fresh when the options are saved. The reload must not reuse it, or no todo
+    entities are created for the chosen lists.
+    """
+    result = await hass.config_entries.flow.async_init(
+        DOMAIN, context={"source": config_entries.SOURCE_USER}
+    )
+    result = await hass.config_entries.flow.async_configure(
+        result["flow_id"],
+        {CONF_ICA_ID: PERSONAL_ID, CONF_ICA_PIN: PIN, "scan_interval": 5},
+    )
+    await hass.async_block_till_done()
+    entry = result["result"]
+    assert CONF_SHOPPING_LISTS not in entry.options
+    # Only the favorites list exists, and the empty list of lists is cached
+    assert hass.states.get("todo.ica_favorite_articles") is not None
+    assert hass.states.get("todo.ica_veckohandling") is None
+    assert entry.runtime_data.get_shopping_list(LIST_ID) is None
+
+    result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"],
+        {
+            "scan_interval": 5,
+            CONF_JSON_DATA_IN_DESC: False,
+            "per_item_events": False,
+            CONF_SHOPPING_LISTS: [LIST_ID],
+        },
+    )
+    await hass.async_block_till_done()
+
+    assert result["type"] is FlowResultType.CREATE_ENTRY
+    assert hass.states.get("todo.ica_veckohandling") is not None
+    assert entry.data[CONF_DIRTY_CACHE] is False
+    await hass.config_entries.async_unload(entry.entry_id)
