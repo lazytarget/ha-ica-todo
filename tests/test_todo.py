@@ -101,6 +101,51 @@ async def test_upsert_merge_sends_created_and_changed_rows(
     assert [r["productName"] for r in sync["createdRows"]] == ["Ägg"]
 
 
+async def test_upsert_merge_keeps_rows_with_incompatible_units_apart(
+    hass, loaded_entry, mock_api
+):
+    """'500 g Gurka' must not be swallowed by the existing '1 st Gurka'."""
+    await hass.services.async_call(
+        DOMAIN,
+        "upsert_shopping_list",
+        {
+            "entity_id": LIST_ENTITY,
+            "rows": ["500 g Gurka"],
+            "conflict_mode": "MERGE",
+        },
+        blocking=True,
+        return_response=True,
+    )
+
+    sync = mock_api.syncs[-1]
+    assert not sync.get("changedRows")
+    [created] = sync["createdRows"]
+    assert (created["productName"], created["quantity"], created["unit"]) == (
+        "Gurka",
+        500,
+        "g",
+    )
+    assert created["offlineId"] != "row-gurka"
+
+
+async def test_upsert_merge_sums_compatible_units(hass, loaded_entry, mock_api):
+    await hass.services.async_call(
+        DOMAIN,
+        "upsert_shopping_list",
+        {
+            "entity_id": LIST_ENTITY,
+            "rows": ["2 st Gurka"],
+            "conflict_mode": "MERGE",
+        },
+        blocking=True,
+        return_response=True,
+    )
+
+    sync = mock_api.syncs[-1]
+    assert not sync.get("createdRows")
+    assert sync["changedRows"][0]["quantity"] == 3
+
+
 async def test_upsert_ignore_without_changes_does_not_sync(
     hass, loaded_entry, mock_api
 ):

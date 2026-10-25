@@ -39,6 +39,7 @@ from .icatypes import (
     ServiceCallResponse,
 )
 from .utils import (
+    can_merge_quantities,
     index_of,
     merge_shopping_list_entries,
     parse_aware_datetime,
@@ -345,6 +346,19 @@ class IcaShoppingListEntity(IcaEntity, TodoListEntity):
                 row["offlineId"] = str(uuid.uuid4())
             else:
                 persisted_row = self._find_matching_row(row, persisted_rows)
+                if (
+                    persisted_row
+                    and conflict_mode == ConflictMode.MERGE
+                    and not can_merge_quantities(persisted_row, row)
+                ):
+                    # E.g. "500 g Gurka" next to "2 st Gurka": adding it as its own
+                    # row keeps the amount, merging would silently drop it
+                    _LOGGER.debug(
+                        "Not merging '%s', the units differ from the persisted row",
+                        row.get("productName"),
+                    )
+                    persisted_row = None
+                    row["offlineId"] = str(uuid.uuid4())
                 if persisted_row and conflict_mode == ConflictMode.MERGE:
                     row = merge_shopping_list_entries(base=persisted_row, other=row)
                     # Assign 'offlineId' on the row that is to be updated

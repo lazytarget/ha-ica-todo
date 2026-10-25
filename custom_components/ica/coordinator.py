@@ -61,6 +61,7 @@ from .utils import (
     index_of,
     is_offer_valid,
     match_offers_to_baseitems,
+    normalize_product_name,
     parse_aware_datetime,
     resolve_list_entity_ids,
     trim_props,
@@ -105,6 +106,10 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
         # The options the integration was (re)loaded with. Used to tell option
         # changes that need a reload from ones that are applied already.
         self.applied_options: dict = dict(config_entry.options)
+
+        # Name lookups of the article list, rebuilt when the list is replaced
+        self._article_index_source: list | None = None
+        self._article_index_value: tuple[dict[str, int], dict[str, int]] = ({}, {})
 
         self._worker = BackgroundWorker(hass, config_entry)
         config_entry.async_on_unload(self._worker.shutdown)
@@ -256,12 +261,44 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
         except (requests.exceptions.RequestException, ValueError, KeyError) as err:
             raise UpdateFailed(f"Error communicating with the ICA API: {err}") from err
 
-    def get_article_group(self, product_name) -> int:
+    def _article_index(self) -> tuple[dict[str, int], dict[str, int]]:
+        """Lookups from article name to article group, built once per article list.
+
+        Returns `(exact, normalized)`: the case-folded names, and the names with
+        Swedish/English plurals stripped. The first article wins on duplicates.
+        """
         articles = self._ica_articles.current_value() or []
-        product_name = product_name.casefold()
-        for x in articles:
-            if x.get("name", "").casefold() == product_name:
-                return x.get("parentId") or DEFAULT_ARTICLE_GROUP_ID
+        if self._article_index_source is not articles:
+            exact: dict[str, int] = {}
+            normalized: dict[str, int] = {}
+            for article in articles:
+                name = (article.get("name") or "").strip()
+                if not name:
+                    continue
+                group = article.get("parentId") or DEFAULT_ARTICLE_GROUP_ID
+                exact.setdefault(name.casefold(), group)
+                normalized.setdefault(normalize_product_name(name), group)
+            self._article_index_source = articles
+            self._article_index_value = (exact, normalized)
+        return self._article_index_value
+
+    def get_article_group(self, product_name) -> int:
+        """The article group of a product name, ignoring case and plural forms.
+
+        An exact match wins over a plural match, e.g. "Gurkor" finds "Gurka" and
+        "Banan" finds "Bananer".
+        """
+        exact, normalized = self._article_index()
+        name = (product_name or "").strip().casefold()
+        stem = normalize_product_name(name)
+        for lookup, key in (
+            (exact, name),  # "gurka" is "Gurka"
+            (exact, stem),  # "potatisar" -> "potatis" is "Potatis"
+            (normalized, name),  # "banan" is "Bananer" (-> "banan")
+            (normalized, stem),  # "gurkor" -> "gurka" and "Gurka" -> "gurka"
+        ):
+            if key and key in lookup:
+                return lookup[key]
         return DEFAULT_ARTICLE_GROUP_ID  # Unspecified
 
     _UNITS = "st|förp|kg|hg|g|l|dl|cl|ml|msk|tsk|krm"
@@ -290,6 +327,8 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
 
         - A unit only matches as a whole word ('1 gurka' is not '1 g urka').
         - The quantity is sent to ICA as a number (ICA rejects strings like '1,5').
+        - A range ('2-3 gurka') uses the upper bound as the quantity, so there is
+          enough rather than too little. The lower bound is dropped from the summary.
         - Text without a leading number is kept as is.
         """
         summary = (summary or "").strip()

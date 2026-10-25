@@ -7,10 +7,18 @@ import pytest
 
 from custom_components.ica import http_requests
 from custom_components.ica.caching import CacheEntry, cache_file_path
+from custom_components.ica.const import DEFAULT_ARTICLE_GROUP_ID
+from custom_components.ica.coordinator import IcaCoordinator
 from custom_components.ica.icaapi import IcaAPI
-from custom_components.ica.utils import parse_aware_datetime, utc_timestamp
+from custom_components.ica.utils import (
+    get_unit_group,
+    parse_aware_datetime,
+    utc_timestamp,
+)
 
 from .conftest import LIST_ID
+
+DEFAULT_GROUP = DEFAULT_ARTICLE_GROUP_ID
 
 
 async def test_no_offer_details_keeps_cached_offers(hass, loaded_entry, mock_api):
@@ -338,3 +346,117 @@ async def test_parse_summary_keeps_names_that_start_with_a_digit(
     assert ti["productName"] == summary
     assert ti["summary"] == summary
     assert "quantity" not in ti
+
+
+@pytest.mark.parametrize("unit", IcaCoordinator._UNITS.split("|"))
+def test_every_unit_the_parser_accepts_is_known_to_the_unit_tables(unit):
+    # Otherwise MERGE cannot add quantities in that unit
+    assert get_unit_group(unit)[0] is not None
+
+
+# The number after the dash is the quantity ("2-3 gurka" -> 3): buy enough
+# rather than too little. The lower bound is dropped from the summary.
+@pytest.mark.parametrize(
+    ("summary", "quantity", "unit", "name", "display"),
+    [
+        ("2-3 gurka", 3, None, "gurka", "3 gurka"),
+        ("2 - 3 gurka", 3, None, "gurka", "3 gurka"),
+        ("2\u20133 gurka", 3, None, "gurka", "3 gurka"),
+        ("1-2 kg lax", 2, "kg", "lax", "2 kg lax"),
+        ("0,5-1 l mjölk", 1, "l", "mjölk", "1 l mjölk"),
+        ("3-3 ägg", 3, None, "ägg", "3 ägg"),
+        # Reversed ranges are not reordered, the number after the dash still wins
+        ("3-2 gurka", 2, None, "gurka", "2 gurka"),
+    ],
+)
+async def test_parse_summary_quantity_range_uses_the_upper_bound(
+    hass, loaded_entry, summary, quantity, unit, name, display
+):
+    ti = loaded_entry.runtime_data.parse_summary(summary)
+    assert ti["quantity"] == quantity
+    assert ti.get("unit") == unit
+    assert ti["productName"] == name
+    assert ti["summary"] == display
+
+
+@pytest.mark.parametrize("summary", ["2-", "-3 gurka", "2--3 gurka"])
+async def test_parse_summary_malformed_ranges_are_kept_as_text(
+    hass, loaded_entry, summary
+):
+    ti = loaded_entry.runtime_data.parse_summary(summary)
+    assert "quantity" not in ti
+    assert ti["productName"] == summary
+
+
+ARTICLES = [
+    {"name": "Gurka", "parentId": 7},
+    {"name": "Mjölk", "parentId": 9},
+    {"name": "Äpple", "parentId": 3},
+    {"name": "Potatis", "parentId": 11},
+    {"name": "Bananer", "parentId": 5},
+]
+
+
+@pytest.fixture
+async def article_coordinator(hass, loaded_entry):
+    coordinator = loaded_entry.runtime_data
+    await coordinator._ica_articles.set_value(ARTICLES)
+    return coordinator
+
+
+@pytest.mark.parametrize(
+    ("name", "group"),
+    [
+        # Exact, ignoring case and surrounding whitespace
+        ("Gurka", 7),
+        ("gurka", 7),
+        ("GURKA", 7),
+        ("  Mjölk ", 9),
+        # Plural forms find the singular article
+        ("Gurkor", 7),
+        ("gurkorna", 7),
+        ("Äpplen", 3),
+        ("Äpplet", 3),
+        ("Potatisar", 11),
+        # An article that is named in the plural is found by both forms
+        ("Bananer", 5),
+        ("Banan", 5),
+        # Unknown names, and names with more than the article name
+        ("Okänd vara", DEFAULT_GROUP),
+        ("Mjölk 3%", DEFAULT_GROUP),
+        ("", DEFAULT_GROUP),
+    ],
+)
+async def test_get_article_group(article_coordinator, name, group):
+    assert article_coordinator.get_article_group(name) == group
+
+
+async def test_get_article_group_prefers_an_exact_match(hass, loaded_entry):
+    coordinator = loaded_entry.runtime_data
+    # "Bär" normalizes to "bär", the same as the plural "Bären"
+    await coordinator._ica_articles.set_value(
+        [{"name": "Bären", "parentId": 2}, {"name": "Bär", "parentId": 4}]
+    )
+    assert coordinator.get_article_group("Bär") == 4
+    assert coordinator.get_article_group("Bären") == 2
+
+
+async def test_get_article_group_without_articles(hass, loaded_entry):
+    coordinator = loaded_entry.runtime_data
+    await coordinator._ica_articles.set_value([])
+    assert coordinator.get_article_group("Gurka") == DEFAULT_GROUP
+
+
+async def test_get_article_group_follows_a_refreshed_article_list(
+    article_coordinator,
+):
+    assert article_coordinator.get_article_group("Ost") == DEFAULT_GROUP
+    await article_coordinator._ica_articles.set_value([{"name": "Ost", "parentId": 21}])
+    assert article_coordinator.get_article_group("Osten") == 21
+    assert article_coordinator.get_article_group("Gurka") == DEFAULT_GROUP
+
+
+async def test_parse_summary_sets_the_article_group_for_plurals(article_coordinator):
+    ti = article_coordinator.parse_summary("3 gurkor")
+    assert ti["productName"] == "gurkor"
+    assert ti["articleGroupId"] == 7
