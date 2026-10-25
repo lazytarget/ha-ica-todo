@@ -5,3 +5,18 @@ testpaths = ["tests"]
 
 [tool.ruff]
 target-version = "py313"
+
+[tool.coverage.run]
+source = ["custom_components/ica"]
+branch = true
+
+[tool.coverage.report]
+# Floor, a bit under the current total. Raise it when the coverage goes up.
+fail_under = 75
+skip_empty = true
+show_missing = true
+skip_covered = true
+exclude_also = [
+    "if __name__ == .__main__.:",
+    "if TYPE_CHECKING:",
+]
