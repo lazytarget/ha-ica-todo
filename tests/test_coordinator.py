@@ -69,8 +69,138 @@ async def test_list_items_changed_event(hass, loaded_entry, mock_api):
     await loaded_entry.runtime_data.async_refresh_all()
     await hass.async_block_till_done()
 
-    assert events[0].data["entity_id"] == "todo.ica_veckohandling"
-    assert events[0].data["added"] == [{"uid": "row-ost", "summary": "Ost"}]
+    data = events[0].data
+    assert data["entity_id"] == "todo.ica_veckohandling"
+    assert data["config_entry_id"] == loaded_entry.entry_id
+    assert data["shopping_list_name"] == "Veckohandling"
+    assert data["origin"] == "ica"
+    assert [(e["uid"], e["summary"]) for e in data["added"]] == [("row-ost", "Ost")]
+    assert data["added"][0]["item"]["productName"] == "Ost"
+
+
+async def test_list_items_changed_event_for_changes_made_in_home_assistant(
+    hass, loaded_entry, mock_api
+):
+    events = []
+    hass.bus.async_listen("ica_list_items_changed", events.append)
+
+    await loaded_entry.runtime_data.sync_shopping_list(
+        {
+            "offlineId": LIST_ID,
+            "changedRows": [{"offlineId": "row-gurka", "isStrikedOver": True}],
+        }
+    )
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data["origin"] == "home_assistant"
+    assert [e["uid"] for e in events[0].data["completed"]] == ["row-gurka"]
+    assert events[0].data["reopened"] == []
+
+
+async def test_no_list_items_changed_event_when_nothing_changed(
+    hass, loaded_entry, mock_api
+):
+    events = []
+    hass.bus.async_listen("ica_list_items_changed", events.append)
+
+    await loaded_entry.runtime_data.async_refresh_all()
+    await hass.async_block_till_done()
+
+    assert events == []
+
+
+async def test_favorite_offers_event(hass, loaded_entry, mock_api):
+    events = []
+    hass.bus.async_listen("ica_favorite_offers", events.append)
+    mock_api.baseitems.append({"id": "base-3", "text": "Ost", "articleEan": "0123"})
+    await loaded_entry.runtime_data.async_get_baseitems(invalidate_cache=True)
+    mock_api.offers.append(
+        {
+            "id": "offer-2",
+            "name": "Ost",
+            "eans": [{"id": "123", "articleDescription": "Ost"}],
+        }
+    )
+    mock_api.offers.append({"id": "offer-3", "name": "Skinka", "eans": []})
+
+    await loaded_entry.runtime_data._update_offer_details()
+    await hass.async_block_till_done()
+
+    assert len(events) == 1
+    assert events[0].data["config_entry_id"] == loaded_entry.entry_id
+    assert events[0].data["offer_ids"] == ["offer-2"]
+
+
+ITEM_EVENTS = (
+    "ica_shopping_list_item_added",
+    "ica_shopping_list_item_removed",
+    "ica_shopping_list_item_completed",
+    "ica_shopping_list_item_reopened",
+)
+
+
+async def test_per_item_events_are_off_by_default(hass, loaded_entry, mock_api):
+    events = []
+    for event_type in ITEM_EVENTS:
+        hass.bus.async_listen(event_type, events.append)
+    mock_api.lists[LIST_ID]["rows"].append(
+        {"id": 14, "offlineId": "row-ost", "productName": "Ost", "isStrikedOver": False}
+    )
+
+    await loaded_entry.runtime_data.async_refresh_all()
+    await hass.async_block_till_done()
+
+    assert events == []
+
+
+async def test_per_item_events_when_enabled(hass, loaded_entry, mock_api):
+    hass.config_entries.async_update_entry(
+        loaded_entry, options={**loaded_entry.options, "per_item_events": True}
+    )
+    await hass.async_block_till_done()  # the options change reloads the entry
+    events = {}
+    for event_type in ITEM_EVENTS:
+        hass.bus.async_listen(
+            event_type, lambda e: events.setdefault(e.event_type, []).append(e.data)
+        )
+    combined = []
+    hass.bus.async_listen("ica_list_items_changed", combined.append)
+    rows = mock_api.lists[LIST_ID]["rows"]
+    rows.append(
+        {"id": 14, "offlineId": "row-ost", "productName": "Ost", "isStrikedOver": False}
+    )
+    rows[:] = [r for r in rows if r["offlineId"] != "row-banan"]
+    for row in rows:
+        if row["offlineId"] == "row-gurka":
+            row["isStrikedOver"] = True
+        if row["offlineId"] == "row-mjolk":
+            row["isStrikedOver"] = False
+
+    await loaded_entry.runtime_data.async_refresh_all()
+    await hass.async_block_till_done()
+
+    assert set(events) == set(ITEM_EVENTS)
+    added = events["ica_shopping_list_item_added"][0]
+    assert added["product_name"] == "Ost"
+    assert added["item"]["offlineId"] == "row-ost"
+    assert added["origin"] == "ica"
+    assert added["config_entry_id"] == loaded_entry.entry_id
+    assert added["entity_id"] == "todo.ica_veckohandling"
+    assert added["shopping_list_name"] == "Veckohandling"
+    assert events["ica_shopping_list_item_removed"][0]["product_name"] == "Banan"
+    assert events["ica_shopping_list_item_completed"][0]["product_name"] == "Gurka"
+    assert events["ica_shopping_list_item_reopened"][0]["product_name"] == "Mjölk"
+    # The combined event is still fired once
+    assert len(combined) == 1
+
+
+def test_list_caches_expire_before_the_next_update(hass, loaded_entry):
+    coordinator = loaded_entry.runtime_data
+    interval = coordinator.update_interval.total_seconds()
+    expected = min(300, interval - 30)
+    assert coordinator._ica_shopping_lists._expiry_seconds == expected
+    assert coordinator._ica_baseitems._expiry_seconds == expected
 
 
 async def test_deleted_list_is_untracked_without_reload(hass, loaded_entry, mock_api):

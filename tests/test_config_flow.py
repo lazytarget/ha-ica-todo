@@ -101,6 +101,7 @@ async def test_options_flow_changes_lists_and_reloads(hass, loaded_entry, mock_a
         {
             "scan_interval": 10,
             CONF_JSON_DATA_IN_DESC: True,
+            "per_item_events": True,
             CONF_SHOPPING_LISTS: [LIST_ID, "LIST-2"],
         },
     )
@@ -109,6 +110,7 @@ async def test_options_flow_changes_lists_and_reloads(hass, loaded_entry, mock_a
     assert result["type"] is FlowResultType.CREATE_ENTRY
     assert loaded_entry.options[CONF_SHOPPING_LISTS] == [LIST_ID, "LIST-2"]
     assert loaded_entry.options["scan_interval"] == 10
+    assert loaded_entry.options["per_item_events"] is True
     # The reload refetched the lists and cleared the dirty flag again
     assert loaded_entry.data[CONF_DIRTY_CACHE] is False
     assert hass.states.get("todo.ica_fest") is not None

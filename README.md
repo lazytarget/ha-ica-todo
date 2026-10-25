@@ -15,7 +15,7 @@ NOTE: Currently under development and might be unstable!
 
 **Integration**
 - [x] Shopping list picker for which lists to track
-- [ ] Implement services and events to use for automations (notifications, etc.)
+- [x] Implement services and events to use for automations (notifications, etc.)
 - [x] Translate strings [sv, en]
 - [x] Implement config flows step for Reauth / refresh tokens
 - [x] Update config entry with token, if doing full auth
@@ -108,6 +108,8 @@ All entities belong to one *ICA* device per account.
 | Service | Purpose |
 |---|---|
 | `ica.refresh_all` | Force a refresh of all cached data |
+| `ica.refresh_shopping_lists` | Fetch the tracked lists from ICA right away (optionally for one `integration`), e.g. to pick up changes made in the ICA app when arriving at the store. Much lighter than `ica.refresh_all` (returns response, optional) |
+| `ica.get_offers` | Currently valid offers in the favorite stores, optionally for one `integration`, some `store_ids`, or `favorites_only` (returns response) |
 | `ica.get_recipe` | Fetch a recipe by `recipe_id` (returns response) |
 | `ica.lookup_product` | Look up a product by barcode/EAN (returns response) |
 | `ica.get_baseitems` | List base items (favorites) for an ICA account (returns response) |
@@ -129,6 +131,8 @@ Example JSON row: `{"productName": "Banan", "productEan": "4011800420710", "quan
 
 `ica_new_offers` is fired when new offers are detected in your favorite stores. Use it as an automation trigger.
 
+`ica_favorite_offers` is fired together with it when new offers match one of your favorite items (base items). Matching is by EAN (ignoring leading zeros), or by name for favorites without an EAN (plural forms are normalized). Payload: `config_entry_id`, `offer_ids` and `offers`.
+
 `ica_lists_changed` is fired after `ica.create_shopping_list` (with `track`) or `ica.delete_shopping_list` has reloaded the integration and the todo entities are registered. Also fired immediately for an untracked create. Payload:
 
 ```json
@@ -137,11 +141,96 @@ Example JSON row: `{"productName": "Banan", "productEan": "4011800420710", "quan
 
 `entities` maps created offline IDs to entity IDs (missing if the reload failed or the list is not tracked).
 
-`ica_list_items_changed` is fired when a refresh finds added, removed or changed rows in a list compared with the previous data (e.g. items added in the ICA app). Not fired on the first load of a list. Payload:
+`ica_list_items_changed` is fired when the rows of a tracked list differ from the previous data. Not fired the first time a list is fetched, as every row would count as added. Payload:
 
 ```json
-{"entity_id": "todo.ica_...", "offline_id": "...", "added": [{"uid": "...", "summary": "..."}], "removed": ["<uid>"], "changed": [{"uid": "...", "summary": "...", "changed_props": ["quantity"]}]}
+{
+  "config_entry_id": "...", "entity_id": "todo.ica_...", "offline_id": "...",
+  "shopping_list_name": "...", "origin": "ica",
+  "added": [{"uid": "...", "summary": "Mjölk", "item": {"...": "full ICA row"}}],
+  "removed": [{"uid": "...", "summary": "Mjölk", "item": {}}],
+  "changed": [{"uid": "...", "summary": "Mjölk", "changed_props": ["quantity"], "item": {}}],
+  "completed": [{"uid": "...", "summary": "Mjölk", "item": {}}],
+  "reopened": []
+}
 ```
+
+- `origin` is `ica` when the change was made outside Home Assistant (e.g. in the ICA app, found when polling) and `home_assistant` when it was made from Home Assistant (found when the sync response updates the cache). Use it to react only to changes made in the app, without reacting to your own changes.
+- `completed` and `reopened` are the rows that were checked off or unchecked. They are also listed in `changed`.
+- `item` is the full ICA row (`quantity`, `unit`, `isStrikedOver`, `offerId`, ...), without the offer details that the todo entity adds.
+- Changes made in the ICA app are picked up when the integration polls ICA (every 5 minutes by default), or right away with `ica.refresh_shopping_lists`.
+
+#### Events per item
+
+Turn on *Events per item* in the integration options to also get one event for every row, besides `ica_list_items_changed`. It is off by default, as a change to many rows (e.g. a whole recipe) then fires many events.
+
+| Event | Fired when |
+|---|---|
+| `ica_shopping_list_item_added` | An item is added to a tracked list |
+| `ica_shopping_list_item_removed` | An item is removed |
+| `ica_shopping_list_item_completed` | An item is checked off |
+| `ica_shopping_list_item_reopened` | A checked off item is unchecked |
+
+Payload: `config_entry_id`, `entity_id`, `offline_id`, `shopping_list_name`, `origin` (as above), `product_name` and `item` (the full ICA row).
+
+### Examples
+
+Notify when someone adds an item from the ICA app:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: ica_list_items_changed
+    event_data:
+      origin: ica
+conditions:
+  - "{{ trigger.event.data.added | count > 0 }}"
+actions:
+  - action: notify.mobile_app_my_phone
+    data:
+      message: >
+        {{ trigger.event.data.added | map(attribute='summary') | join(', ') }}
+        added to {{ trigger.event.data.shopping_list_name }}
+```
+
+Notify when your favorite items go on offer:
+
+```yaml
+triggers:
+  - trigger: event
+    event_type: ica_favorite_offers
+actions:
+  - action: notify.mobile_app_my_phone
+    data:
+      title: Favorites on offer
+      message: >
+        {% for o in trigger.event.data.offers %}
+        - {{ o.name }}: {{ o.offerPriceText }}
+        {% endfor %}
+```
+
+A weekly summary of favorite items on offer:
+
+```yaml
+triggers:
+  - trigger: time
+    at: "08:00:00"
+conditions:
+  - condition: time
+    weekday: [mon]
+actions:
+  - action: ica.get_offers
+    data:
+      favorites_only: true
+    response_variable: offers
+  - if: "{{ offers.data | count > 0 }}"
+    then:
+      - action: notify.mobile_app_my_phone
+        data:
+          message: "{{ offers.data | map(attribute='name') | join(', ') }}"
+```
+
+See also the blueprint [ica_track_new_offers.yaml](custom_components/ica/blueprints/ica_track_new_offers.yaml) for adding matching offers to a shopping list.
 
 ## Upgrading from v0.9.0 or earlier
 

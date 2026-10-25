@@ -39,11 +39,13 @@
         "data": {
           "scan_interval": "Uppdateringsintervall (minuter)",
           "json_data_in_desc": "JSON-data i beskrivningen",
+          "per_item_events": "Händelser per rad",
           "shopping_lists": "Inköpslistor"
         },
         "data_description": {
           "scan_interval": "Hur ofta data hämtas från ICA",
           "json_data_in_desc": "Visa extra data (mängd, erbjudande, EAN, ...) som JSON i varje varas beskrivning",
+          "per_item_events": "Skicka även en händelse för varje tillagd, borttagen, avbockad och ombockad rad, utöver den samlade händelsen ica_list_items_changed",
           "shopping_lists": "Inköpslistorna som ska visas som att göra-listor"
         }
       }
@@ -71,6 +73,16 @@
     "refresh_all": {
       "name": "Uppdatera allt",
       "description": "Hämtar all data från ICA igen, utan cache"
+    },
+    "refresh_shopping_lists": {
+      "name": "Uppdatera inköpslistor",
+      "description": "Hämtar de spårade inköpslistorna från ICA direkt, till exempel för att få med ändringar som gjorts i ICA-appen",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot som ska uppdateras. Standard är alla konton"
+        }
+      }
     },
     "get_recipe": {
       "name": "Hämta recept",
@@ -181,6 +193,24 @@
         "entity_id": {
           "name": "Inköpslista",
           "description": "ICA-inköpslistan"
+        }
+      }
+    },
+    "get_offers": {
+      "name": "Hämta erbjudanden",
+      "description": "Hämtar de just nu giltiga erbjudandena i favoritbutikerna",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot att hämta erbjudanden för. Standard är det första kontot"
+        },
+        "store_ids": {
+          "name": "Butiks-id",
+          "description": "Ta bara med erbjudanden som gäller i dessa butiker. Lämna tomt för alla favoritbutiker"
+        },
+        "favorites_only": {
+          "name": "Bara favoriter",
+          "description": "Ta bara med erbjudanden som matchar kontots favoritvaror"
         }
       }
     }

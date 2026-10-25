@@ -1,6 +1,16 @@
 ---
 refresh_all:
 
+refresh_shopping_lists:
+  fields:
+    integration:
+      name: "ICA Account"
+      description: "The ICA account to refresh. Defaults to all accounts"
+      required: false
+      selector:
+        config_entry:
+          integration: ica
+
 get_recipe:
   # target:
   #   entity:
@@ -117,6 +127,31 @@ add_offers_to_shopping_list:
             - "APPEND"
             - "MERGE"
             - "IGNORE"
+
+get_offers:
+  fields:
+    integration:
+      name: "ICA Account"
+      description: "The ICA account to get offers for. Defaults to the first account"
+      required: false
+      selector:
+        config_entry:
+          integration: ica
+    store_ids:
+      name: "Store ids"
+      description: "Only include offers valid in these stores. Leave empty for all favorite stores"
+      example: "12805"
+      required: false
+      selector:
+        text:
+          multiple: true
+    favorites_only:
+      name: "Favorites only"
+      description: "Only include offers that match the account's favorite items"
+      default: false
+      required: false
+      selector:
+        boolean:
 
 create_shopping_list:
   fields:

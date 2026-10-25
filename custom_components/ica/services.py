@@ -11,7 +11,14 @@ from homeassistant.helpers import entity_registry as er
 
 from .const import CONF_DIRTY_CACHE, CONF_SHOPPING_LISTS, DOMAIN, IcaEvents, IcaServices
 from .coordinator import IcaCoordinator
-from .icatypes import IcaBaseItem, IcaProduct, IcaRecipe, ServiceCallResponse
+from .icatypes import (
+    IcaBaseItem,
+    IcaOfferInfo,
+    IcaProduct,
+    IcaRecipe,
+    IcaShoppingList,
+    ServiceCallResponse,
+)
 from .utils import build_lists_changed_event, resolve_list_entity_ids
 
 _LOGGER = logging.getLogger(__name__)
@@ -53,6 +60,22 @@ LOOKUP_PRODUCT_SCHEMA = vol.Schema(
 SEARCH_ARTICLES_SCHEMA = vol.Schema(
     {
         vol.Required("query"): cv.string,
+    }
+)
+
+GET_OFFERS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("integration"): cv.string,
+        vol.Optional("store_ids", default=[]): vol.All(
+            cv.ensure_list, [vol.Coerce(int)]
+        ),
+        vol.Optional("favorites_only", default=False): cv.boolean,
+    }
+)
+
+REFRESH_SHOPPING_LISTS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("integration"): cv.string,
     }
 )
 
@@ -399,4 +422,56 @@ def setup_global_services(hass: HomeAssistant) -> None:
             handle_search_articles,
             schema=SEARCH_ARTICLES_SCHEMA,
             supports_response=SupportsResponse.ONLY,
+        )
+
+    if not hass.services.has_service(DOMAIN, IcaServices.GET_OFFERS):
+
+        async def handle_get_offers(
+            call: ServiceCall,
+        ) -> ServiceCallResponse[list[IcaOfferInfo]]:
+            """Return the currently valid offers, optionally filtered."""
+            if entry_id := call.data.get("integration"):
+                coordinator = _get_coordinator(hass, entry_id)
+            else:
+                coordinator = _get_any_coordinator(hass)
+            offers = await coordinator.async_get_offers(
+                store_ids=call.data["store_ids"],
+                favorites_only=call.data["favorites_only"],
+            )
+            return ServiceCallResponse[list[IcaOfferInfo]](success=True, data=offers)
+
+        hass.services.async_register(
+            DOMAIN,
+            IcaServices.GET_OFFERS,
+            handle_get_offers,
+            schema=GET_OFFERS_SCHEMA,
+            supports_response=SupportsResponse.ONLY,
+        )
+
+    if not hass.services.has_service(DOMAIN, IcaServices.REFRESH_SHOPPING_LISTS):
+
+        async def handle_refresh_shopping_lists(
+            call: ServiceCall,
+        ) -> ServiceCallResponse[list[IcaShoppingList]]:
+            """Fetch the tracked shopping lists from ICA right away."""
+            if entry_id := call.data.get("integration"):
+                coordinators = [_get_coordinator(hass, entry_id)]
+            else:
+                coordinators = [
+                    _get_coordinator(hass, config_entry.entry_id)
+                    for config_entry in hass.config_entries.async_entries(DOMAIN)
+                ]
+            shopping_lists: list[IcaShoppingList] = []
+            for coordinator in coordinators:
+                shopping_lists.extend(await coordinator.async_refresh_shopping_lists())
+            return ServiceCallResponse[list[IcaShoppingList]](
+                success=True, data=shopping_lists
+            )
+
+        hass.services.async_register(
+            DOMAIN,
+            IcaServices.REFRESH_SHOPPING_LISTS,
+            handle_refresh_shopping_lists,
+            schema=REFRESH_SHOPPING_LISTS_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
         )

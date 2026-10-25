@@ -24,10 +24,13 @@ from .const import (
     CACHING_SECONDS_SHORT_TERM,
     CONF_DIRTY_CACHE,
     CONF_ICA_ID,
+    CONF_PER_ITEM_EVENTS,
     CONF_SHOPPING_LISTS,
     DEFAULT_ARTICLE_GROUP_ID,
     DOMAIN,
+    PER_ITEM_EVENTS,
     ConflictMode,
+    IcaEventOrigin,
     IcaEvents,
     entry_cache_key,
 )
@@ -56,6 +59,8 @@ from .utils import (
     get_diff_obj,
     get_diffs,
     index_of,
+    is_offer_valid,
+    match_offers_to_baseitems,
     parse_aware_datetime,
     resolve_list_entity_ids,
     trim_props,
@@ -107,6 +112,11 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
         self._session = async_get_clientsession(hass)
 
         key = entry_cache_key(config_entry)
+        # Expire just before the next scheduled update, so that every update fetches
+        # fresh data. Otherwise an update can land right before expiry and skip it.
+        short_term_expiry = min(
+            CACHING_SECONDS_SHORT_TERM, max(update_interval.total_seconds() - 30, 0)
+        )
 
         self._ica_articles = CacheEntry[list[IcaArticle]](
             hass, "articles", partial(self.api.get_articles)
@@ -115,7 +125,7 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
             hass,
             f"{key}.baseitems",
             partial(self.api.get_baseitems),
-            expiry_seconds=CACHING_SECONDS_SHORT_TERM,
+            expiry_seconds=short_term_expiry,
         )
         self._ica_current_bonus = CacheEntry[IcaAccountCurrentBonus](
             hass, f"{key}.current_bonus", partial(self._get_current_bonus)
@@ -129,7 +139,7 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
             hass,
             f"{key}.shopping_lists",
             partial(self._async_update_tracked_shopping_lists),
-            expiry_seconds=CACHING_SECONDS_SHORT_TERM,
+            expiry_seconds=short_term_expiry,
         )
         self._ica_offers = CacheEntry[dict[str, IcaOfferDetails]](
             hass,
@@ -233,6 +243,18 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
             # Updated Shopping list cache outside of regular `_async_update_data-loop`, inform listeners...
             self._publish()
         return selected_lists
+
+    async def async_refresh_shopping_lists(self) -> list[IcaShoppingList]:
+        """Fetch the tracked shopping lists from ICA right away, bypassing the cache."""
+        try:
+            if self.should_refresh_login():
+                new_auth_state = await self.api.ensure_login(refresh=True)
+                self._persist_state(new_auth_state, None)
+            return await self.async_get_shopping_lists(invalidate_cache=True)
+        except IcaAuthError as err:
+            raise ConfigEntryAuthFailed(str(err)) from err
+        except (requests.exceptions.RequestException, ValueError, KeyError) as err:
+            raise UpdateFailed(f"Error communicating with the ICA API: {err}") from err
 
     def get_article_group(self, product_name) -> int:
         articles = self._ica_articles.current_value() or []
@@ -414,6 +436,19 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
                 },
             )
 
+            # Notify new offers on the user's favorite items
+            if favorite_offers := match_offers_to_baseitems(
+                new_offers, self._ica_baseitems.current_value()
+            ):
+                await self._worker.fire_or_queue_event(
+                    IcaEvents.FAVORITE_OFFERS,
+                    {
+                        "config_entry_id": self.config_entry.entry_id,
+                        "offer_ids": [o["id"] for o in favorite_offers],
+                        "offers": favorite_offers,
+                    },
+                )
+
         _LOGGER.debug(
             "Updated offer details, pre_count: %s, post_count: %s",
             pre_count,
@@ -586,18 +621,9 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
             old_rows = previous["rows"] if previous else []
             if previous is not None:
                 # Skipped for lists seen for the first time, so initial load is silent
-                changes = diff_list_rows(old_rows, shopping_list["rows"])
-                if any(changes.values()):
-                    await self._worker.fire_or_queue_event(
-                        IcaEvents.LIST_ITEMS_CHANGED,
-                        {
-                            "entity_id": self._list_entity_id(
-                                shopping_list["offlineId"]
-                            ),
-                            "offline_id": shopping_list["offlineId"],
-                            **changes,
-                        },
-                    )
+                await self._fire_list_items_changed(
+                    shopping_list, old_rows, IcaEventOrigin.ICA
+                )
             if diffs := get_diffs(old_rows, shopping_list["rows"]):
                 await self._worker.fire_or_queue_event(
                     f"{DOMAIN}_event",
@@ -630,6 +656,9 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
         state = list(self._ica_shopping_lists.current_value() or [])
         index = index_of(state, "offlineId", updated_list["offlineId"])
         if index >= 0:
+            await self._fire_list_items_changed(
+                updated_list, state[index]["rows"], IcaEventOrigin.HOME_ASSISTANT
+            )
             state[index] = updated_list
             await self._ica_shopping_lists.set_value(state)
             _LOGGER.debug("Dynamically updated Shopping list cache")
@@ -644,6 +673,65 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
             )
             or updated_list
         )
+
+    async def _fire_list_items_changed(
+        self,
+        shopping_list: IcaShoppingList,
+        old_rows: list,
+        origin: IcaEventOrigin,
+    ) -> None:
+        """Fire `ica_list_items_changed` when the rows of a list differ."""
+        changes = diff_list_rows(old_rows, shopping_list["rows"])
+        if not any(changes.values()):
+            return
+        offline_id = shopping_list["offlineId"]
+        base_data = {
+            "config_entry_id": self.config_entry.entry_id,
+            "entity_id": self._list_entity_id(offline_id),
+            "offline_id": offline_id,
+            "shopping_list_name": shopping_list["title"],
+            "origin": origin,
+        }
+        await self._worker.fire_or_queue_event(
+            IcaEvents.LIST_ITEMS_CHANGED, {**base_data, **changes}
+        )
+        if not self.config_entry.options.get(CONF_PER_ITEM_EVENTS, False):
+            return
+        # Opt-in: also one event per row, for automations that react per item
+        for change, event_type in PER_ITEM_EVENTS.items():
+            for entry in changes[change]:
+                await self._worker.fire_or_queue_event(
+                    event_type,
+                    {
+                        **base_data,
+                        "product_name": entry["summary"],
+                        "item": entry["item"],
+                    },
+                )
+
+    async def async_get_offers(
+        self, store_ids: list[int] | None = None, favorites_only: bool = False
+    ) -> list[IcaOfferInfo]:
+        """Return the currently valid offers in the favorite stores."""
+        now = dt_util.now()
+        tz = dt_util.get_default_time_zone()
+        all_offers = await self._ica_offers.get_value() or {}
+        offers = [
+            IcaOfferInfo.map_from_offer_details(o)
+            for o in all_offers.values()
+            if is_offer_valid(o, now, tz)
+        ]
+        if store_ids:
+            offers = [
+                o
+                for o in offers
+                if any(s.get("id") in store_ids for s in o.get("stores") or [])
+            ]
+        if favorites_only:
+            offers = match_offers_to_baseitems(
+                offers, await self._ica_baseitems.get_value()
+            )
+        return sorted(offers, key=lambda o: o.get("validTo") or "")
 
     def get_baseitems(self) -> list[IcaBaseItem]:
         """Return ICA favorite items (baseitems) from the cache."""

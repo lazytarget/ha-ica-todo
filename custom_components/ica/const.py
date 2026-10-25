@@ -14,6 +14,7 @@ CONF_ICA_PIN: Final = "pin_code"
 CONF_SHOPPING_LISTS: Final = "shopping_lists"
 CONF_DIRTY_CACHE: Final = "dirty_cache"
 CONF_JSON_DATA_IN_DESC: Final = "json_data_in_desc"
+CONF_PER_ITEM_EVENTS: Final = "per_item_events"
 CONF_AUTH_STATE: Final = "auth_state"
 
 # Settings that live in `entry.options` (changed via the options flow)
@@ -79,12 +80,36 @@ class IcaServices(StrEnum):
     ADD_OFFERS_TO_SHOPPING_LIST = "add_offers_to_shopping_list"
     CREATE_SHOPPING_LIST = "create_shopping_list"
     DELETE_SHOPPING_LIST = "delete_shopping_list"
+    GET_OFFERS = "get_offers"
+    REFRESH_SHOPPING_LISTS = "refresh_shopping_lists"
 
 
 class IcaEvents(StrEnum):
     NEW_OFFERS = f"{DOMAIN}_new_offers"
+    FAVORITE_OFFERS = f"{DOMAIN}_favorite_offers"
     LISTS_CHANGED = f"{DOMAIN}_lists_changed"
     LIST_ITEMS_CHANGED = f"{DOMAIN}_list_items_changed"
+    # Only fired when the `per_item_events` option is on
+    SHOPPING_LIST_ITEM_ADDED = f"{DOMAIN}_shopping_list_item_added"
+    SHOPPING_LIST_ITEM_REMOVED = f"{DOMAIN}_shopping_list_item_removed"
+    SHOPPING_LIST_ITEM_COMPLETED = f"{DOMAIN}_shopping_list_item_completed"
+    SHOPPING_LIST_ITEM_REOPENED = f"{DOMAIN}_shopping_list_item_reopened"
+
+
+# Maps the keys of `utils.diff_list_rows` to their per-item event
+PER_ITEM_EVENTS: Final = {
+    "added": IcaEvents.SHOPPING_LIST_ITEM_ADDED,
+    "removed": IcaEvents.SHOPPING_LIST_ITEM_REMOVED,
+    "completed": IcaEvents.SHOPPING_LIST_ITEM_COMPLETED,
+    "reopened": IcaEvents.SHOPPING_LIST_ITEM_REOPENED,
+}
+
+
+class IcaEventOrigin(StrEnum):
+    """Where a shopping list change was made"""
+
+    ICA = "ica"  # Outside of Home Assistant, e.g. in the ICA app
+    HOME_ASSISTANT = "home_assistant"
 
 
 class API:

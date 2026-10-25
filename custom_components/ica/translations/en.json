@@ -39,11 +39,13 @@
         "data": {
           "scan_interval": "Update interval (minutes)",
           "json_data_in_desc": "JSON data in description",
+          "per_item_events": "Events per item",
           "shopping_lists": "Shopping lists"
         },
         "data_description": {
           "scan_interval": "How often to fetch data from ICA",
           "json_data_in_desc": "Show extra item data (quantity, offer, EAN, ...) as JSON in each item's description",
+          "per_item_events": "Also fire an event for every added, removed, checked off and unchecked item, besides the combined ica_list_items_changed event",
           "shopping_lists": "The shopping lists to track as to-do lists"
         }
       }
@@ -71,6 +73,16 @@
     "refresh_all": {
       "name": "Refresh all",
       "description": "Fetches all data from ICA again, ignoring the cache"
+    },
+    "refresh_shopping_lists": {
+      "name": "Refresh shopping lists",
+      "description": "Fetches the tracked shopping lists from ICA right away, e.g. to pick up changes made in the ICA app",
+      "fields": {
+        "integration": {
+          "name": "ICA Account",
+          "description": "The ICA account to refresh. Defaults to all accounts"
+        }
+      }
     },
     "get_recipe": {
       "name": "Get recipe",
@@ -181,6 +193,24 @@
         "entity_id": {
           "name": "Shopping list",
           "description": "The ICA shopping list"
+        }
+      }
+    },
+    "get_offers": {
+      "name": "Get offers",
+      "description": "Gets the currently valid offers in the favorite stores",
+      "fields": {
+        "integration": {
+          "name": "ICA Account",
+          "description": "The ICA account to get offers for. Defaults to the first account"
+        },
+        "store_ids": {
+          "name": "Store ids",
+          "description": "Only include offers valid in these stores. Leave empty for all favorite stores"
+        },
+        "favorites_only": {
+          "name": "Favorites only",
+          "description": "Only include offers that match the account's favorite items"
         }
       }
     }

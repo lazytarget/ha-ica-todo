@@ -24,6 +24,7 @@ from .const import (
     CONF_ICA_ID,
     CONF_ICA_PIN,
     CONF_JSON_DATA_IN_DESC,
+    CONF_PER_ITEM_EVENTS,
     CONF_SHOPPING_LISTS,
     CONFIG_ENTRY_NAME,
     DEFAULT_SCAN_INTERVAL,
@@ -204,6 +205,10 @@ class IcaOptionsFlowHandler(OptionsFlow):
                 vol.Required(
                     CONF_JSON_DATA_IN_DESC,
                     default=options.get(CONF_JSON_DATA_IN_DESC, False),
+                ): bool,
+                vol.Required(
+                    CONF_PER_ITEM_EVENTS,
+                    default=options.get(CONF_PER_ITEM_EVENTS, False),
                 ): bool,
                 # Without the lists from ICA, the tracked lists are left unchanged
                 **(

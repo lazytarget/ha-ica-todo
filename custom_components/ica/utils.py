@@ -513,31 +513,98 @@ def build_lists_changed_event(
 
 
 def diff_list_rows(old_rows, new_rows) -> dict[str, list]:
-    """Compare shopping list rows by `offlineId`.
+    """Compare shopping list rows by `offlineId` (case-insensitive).
 
-    Returns `added` ([{uid, summary}]), `removed` ([uid]) and `changed`
-    ([{uid, summary, changed_props}]). Empty when nothing differs.
+    Returns `added`, `removed`, `changed`, `completed` and `reopened`. Each
+    entry is `{uid, summary, item}` with `item` the full row (the new version,
+    or the old one when removed). `changed` also has `changed_props`.
+    `completed`/`reopened` are the rows whose `isStrikedOver` flipped; they are
+    also in `changed`. Empty when nothing differs.
     """
-    old = {r["offlineId"]: r for r in old_rows or [] if r.get("offlineId")}
-    new = {r["offlineId"]: r for r in new_rows or [] if r.get("offlineId")}
-    added = [
-        {"uid": uid, "summary": row.get("productName")}
-        for uid, row in new.items()
-        if uid not in old
-    ]
-    removed = [uid for uid in old if uid not in new]
-    changed = []
+
+    def index(rows):
+        return {
+            str(r["offlineId"]).casefold(): r for r in rows or [] if r.get("offlineId")
+        }
+
+    def entry(row, **extra):
+        return {
+            "uid": row["offlineId"],
+            "summary": row.get("productName"),
+            **extra,
+            "item": {k: v for k, v in row.items() if k != "offer"},
+        }
+
+    old, new = index(old_rows), index(new_rows)
+    result: dict[str, list] = {
+        "added": [entry(row) for uid, row in new.items() if uid not in old],
+        "removed": [entry(row) for uid, row in old.items() if uid not in new],
+        "changed": [],
+        "completed": [],
+        "reopened": [],
+    }
     for uid, row in new.items():
         if uid not in old:
             continue
+        before = old[uid]
+        # `offer` is added by the todo entity, `latestChange` changes on every sync
         props = [
-            k for k in row if k != "latestChange" and row.get(k) != old[uid].get(k)
+            k
+            for k in row
+            if k not in ("latestChange", "offer") and row.get(k) != before.get(k)
         ]
-        if props:
-            changed.append(
-                {"uid": uid, "summary": row.get("productName"), "changed_props": props}
-            )
-    return {"added": added, "removed": removed, "changed": changed}
+        if not props:
+            continue
+        result["changed"].append(entry(row, changed_props=props))
+        if row.get("isStrikedOver") and not before.get("isStrikedOver"):
+            result["completed"].append(entry(row))
+        elif before.get("isStrikedOver") and not row.get("isStrikedOver"):
+            result["reopened"].append(entry(row))
+    return result
+
+
+def match_offers_to_baseitems(
+    offers: list[dict] | None, baseitems: list[dict] | None
+) -> list[dict]:
+    """Return the offers that match any of the favorite items (baseitems).
+
+    A favorite with an EAN matches offers that include that EAN (ignoring
+    leading zeros). A favorite without an EAN matches on its name against the
+    offer name or the article names of the offer, accounting for plurals.
+    """
+    eans: set[str] = set()
+    names: set[str] = set()
+    for item in baseitems or []:
+        if ean := item.get("articleEan"):
+            eans.add(str(ean).lstrip("0"))
+        elif text := item.get("text"):
+            names.add(normalize_product_name(text))
+    eans.discard("")
+    names.discard("")
+    if not eans and not names:
+        return []
+
+    def is_match(offer: dict) -> bool:
+        for ean in offer.get("eans") or []:
+            if str(ean.get("id") or "").lstrip("0") in eans:
+                return True
+            if normalize_product_name(ean.get("articleDescription")) in names:
+                return True
+        return normalize_product_name(offer.get("name")) in names
+
+    return [offer for offer in offers or [] if is_match(offer)]
+
+
+def is_offer_valid(offer: dict, now: dt.datetime, default_tz: dt.tzinfo) -> bool:
+    """Whether the offer is valid at `now` (timezone aware).
+
+    Offer timestamps without an offset are read in `default_tz`.
+    """
+    valid_from = parse_aware_datetime(offer.get("validFrom"), default_tz)
+    valid_to = parse_aware_datetime(offer.get("validTo"), default_tz)
+    started = valid_from is None or valid_from <= now
+    ended = valid_to is not None and valid_to < now
+    return started and not ended
 
 
 def utc_timestamp(now: dt.datetime | None = None) -> str:
