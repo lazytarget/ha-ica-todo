@@ -7,7 +7,7 @@ import re
 import uuid
 from datetime import UTC, datetime, timedelta
 from functools import partial
-from typing import TypedDict
+from typing import TYPE_CHECKING, TypedDict
 
 import homeassistant.util.dt as dt_util
 import requests
@@ -68,6 +68,9 @@ from .utils import (
     try_parse_int,
 )
 
+if TYPE_CHECKING:
+    from .list_sync import ListSyncManager
+
 _LOGGER = logging.getLogger(__name__)
 
 # Offers are kept this long after they expired, so items in lists can still show them
@@ -106,6 +109,8 @@ class IcaCoordinator(DataUpdateCoordinator[IcaCoordinatorData]):
         # The options the integration was (re)loaded with. Used to tell option
         # changes that need a reload from ones that are applied already.
         self.applied_options: dict = dict(config_entry.options)
+        # Set up after the entities when source lists are synced into ICA lists
+        self.list_sync: ListSyncManager | None = None
 
         # Name lookups of the article list, rebuilt when the list is replaced
         self._article_index_source: list | None = None

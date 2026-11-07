@@ -79,6 +79,12 @@ REFRESH_SHOPPING_LISTS_SCHEMA = vol.Schema(
     }
 )
 
+SYNC_LISTS_SCHEMA = vol.Schema(
+    {
+        vol.Optional("integration"): cv.string,
+    }
+)
+
 
 def _get_coordinator(hass: HomeAssistant, entry_id: str) -> IcaCoordinator:
     """The coordinator of a loaded ICA config entry."""
@@ -473,5 +479,34 @@ def setup_global_services(hass: HomeAssistant) -> None:
             IcaServices.REFRESH_SHOPPING_LISTS,
             handle_refresh_shopping_lists,
             schema=REFRESH_SHOPPING_LISTS_SCHEMA,
+            supports_response=SupportsResponse.OPTIONAL,
+        )
+
+    if not hass.services.has_service(DOMAIN, IcaServices.SYNC_LISTS):
+
+        async def handle_sync_lists(call: ServiceCall):
+            """Sync the source to-do lists into their ICA lists right away."""
+            if entry_id := call.data.get("integration"):
+                coordinators = [_get_coordinator(hass, entry_id)]
+            else:
+                coordinators = [
+                    _get_coordinator(hass, config_entry.entry_id)
+                    for config_entry in hass.config_entries.async_entries(DOMAIN)
+                ]
+            counts = {"created": 0, "changed": 0, "deleted": 0}
+            for coordinator in coordinators:
+                if coordinator.list_sync is None:
+                    continue
+                for key, value in (
+                    await coordinator.list_sync.async_sync_all()
+                ).items():
+                    counts[key] += value
+            return counts
+
+        hass.services.async_register(
+            DOMAIN,
+            IcaServices.SYNC_LISTS,
+            handle_sync_lists,
+            schema=SYNC_LISTS_SCHEMA,
             supports_response=SupportsResponse.OPTIONAL,
         )

@@ -16,6 +16,10 @@ CONF_DIRTY_CACHE: Final = "dirty_cache"
 CONF_JSON_DATA_IN_DESC: Final = "json_data_in_desc"
 CONF_PER_ITEM_EVENTS: Final = "per_item_events"
 CONF_AUTH_STATE: Final = "auth_state"
+# Source to-do lists that are synced into ICA lists, see `list_sync.py`
+CONF_LIST_SYNCS: Final = "list_syncs"
+CONF_LIST_SYNC_SOURCE: Final = "source_entity_id"
+CONF_LIST_SYNC_TARGET: Final = "target_list_id"
 
 # Settings that live in `entry.options` (changed via the options flow)
 OPTION_KEYS: Final = (CONF_SHOPPING_LISTS, CONF_JSON_DATA_IN_DESC, "scan_interval")
@@ -82,6 +86,7 @@ class IcaServices(StrEnum):
     DELETE_SHOPPING_LIST = "delete_shopping_list"
     GET_OFFERS = "get_offers"
     REFRESH_SHOPPING_LISTS = "refresh_shopping_lists"
+    SYNC_LISTS = "sync_lists"
 
 
 class IcaEvents(StrEnum):

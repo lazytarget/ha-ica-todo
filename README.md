@@ -84,15 +84,31 @@ Set up via the UI (config flow):
 
 Authentication tokens are stored in the config entry and refreshed automatically (re-login on expiry or HTTP 401). If the login stops working (e.g. a changed PIN), Home Assistant shows a *Reconfigure* notice where you enter the new PIN.
 
-After setup, *Configure* (options) lets you change:
+After setup, *Configure* → *Settings* lets you change:
 
 | Option | Description |
 |---|---|
 | Update interval | Minutes between fetches from ICA |
 | JSON data in description | Show extra item data (quantity, offer, EAN, ...) as JSON in each item's description |
 | Shopping lists | Which ICA shopping lists to track as to-do lists |
+| Events per item | Also fire one event per added, removed, checked off and unchecked row |
 
 Saving the options reloads the integration; changing the tracked lists also refetches them.
+
+### Sync another to-do list into ICA (beta)
+
+> [!NOTE]
+> This is a beta feature. It has been tested with Mealie on one installation so far. Please report how it works for you, with Mealie or any other to-do list, in an issue.
+
+*Configure* → *Sync a to-do list into ICA* keeps an ICA list fed from any other to-do list in Home Assistant, e.g. a Mealie shopping list (`todo.mealie_handla`) or Google Keep. Pick the source list, then the tracked ICA list to add its items to. A list named like the source without its prefix is suggested, e.g. *ICA Handla* for *Mealie Handla*.
+
+- One way only: changes made in ICA never go back to the source list.
+- Every open item in the source becomes its own row in ICA. Quantity and unit are read from the text as usual, e.g. "2 st Mjölk". The trailing " None" that Mealie shows on recipe items ("6 ägg None") is left out. Rows are never merged into an existing row.
+- When an item is checked off or deleted in the source, the row it created is deleted from ICA. An edited item updates its row.
+- Rows you add to ICA in other ways are never touched. A synced row you delete in ICA is not added again while the source item stays open.
+- Syncs a couple of seconds after the source list changes, and after each refresh from ICA. `ica.sync_lists` syncs right away.
+
+*Stop syncing a to-do list* removes a sync; rows that were added to ICA already stay there.
 
 Cached ICA data is stored in `.storage/ica.*.json` and is deleted when the integration is removed. Neither the cache file names nor the logs contain your personal ID number, PIN or tokens.
 
@@ -108,6 +124,7 @@ All entities belong to one *ICA* device per account.
 | Service | Purpose |
 |---|---|
 | `ica.refresh_all` | Force a refresh of all cached data |
+| `ica.sync_lists` | Sync the source to-do lists into their ICA lists right away (optionally for one `integration`), see [Sync another to-do list into ICA](#sync-another-to-do-list-into-ica-beta). Returns the number of `created`, `changed` and `deleted` rows (returns response, optional) |
 | `ica.refresh_shopping_lists` | Fetch the tracked lists from ICA right away (optionally for one `integration`), e.g. to pick up changes made in the ICA app when arriving at the store. Much lighter than `ica.refresh_all` (returns response, optional) |
 | `ica.get_offers` | Currently valid offers in the favorite stores, optionally for one `integration`, some `store_ids`, or `favorites_only` (returns response) |
 | `ica.get_recipe` | Fetch a recipe by `recipe_id` (returns response) |
@@ -248,7 +265,7 @@ Requires Home Assistant 2025.1 or later.
 
 ## Development
 
-- Layout: `coordinator.py` (polling, caching, offer events), `todo.py` (entities + list services), `services.py` (global services), `utils.py` (merge, unit conversion, name normalization, timestamps), `caching.py` (file cache), `authenticator.py` / `icaapi*.py` / `http_requests.py` (ICA API client), `openfoodfacts.py`, `config_flow.py` (setup, reauth, options).
+- Layout: `coordinator.py` (polling, caching, offer events), `todo.py` (entities + list services), `services.py` (global services), `utils.py` (merge, unit conversion, name normalization, timestamps), `caching.py` (file cache), `authenticator.py` / `icaapi*.py` / `http_requests.py` (ICA API client), `openfoodfacts.py`, `list_sync.py` (syncing other to-do lists into ICA lists), `config_flow.py` (setup, reauth, options).
 - Setup: `python3.13 -m venv .venv && .venv/bin/pip install -r requirements-dev.txt`
 - Tests: `.venv/bin/pytest` (config/options/reauth flows, migration, entities, services, coordinator, cache and the `utils` helpers; the ICA API is faked in `tests/conftest.py`). CI runs them on every PR.
 - Lint: `pre-commit run -a` (ruff check + format, yamllint).

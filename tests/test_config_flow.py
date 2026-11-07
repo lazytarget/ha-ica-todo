@@ -94,6 +94,11 @@ async def test_options_flow_changes_lists_and_reloads(hass, loaded_entry, mock_a
         "rows": [],
     }
     result = await hass.config_entries.options.async_init(loaded_entry.entry_id)
+    assert result["type"] is FlowResultType.MENU
+    assert result["menu_options"] == ["settings", "add_list_sync"]
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
     assert result["type"] is FlowResultType.FORM
 
     result = await hass.config_entries.options.async_configure(
@@ -139,6 +144,9 @@ async def test_lists_picked_right_after_setup_get_entities(hass, mock_api):
     assert entry.runtime_data.get_shopping_list(LIST_ID) is None
 
     result = await hass.config_entries.options.async_init(entry.entry_id)
+    result = await hass.config_entries.options.async_configure(
+        result["flow_id"], {"next_step_id": "settings"}
+    )
     result = await hass.config_entries.options.async_configure(
         result["flow_id"],
         {

@@ -36,6 +36,14 @@
   "options": {
     "step": {
       "init": {
+        "title": "ICA",
+        "menu_options": {
+          "settings": "Inställningar",
+          "add_list_sync": "Synka en att göra-lista till ICA (beta)",
+          "remove_list_sync": "Sluta synka en att göra-lista"
+        }
+      },
+      "settings": {
         "data": {
           "scan_interval": "Uppdateringsintervall (minuter)",
           "json_data_in_desc": "JSON-data i beskrivningen",
@@ -47,11 +55,40 @@
           "json_data_in_desc": "Visa extra data (mängd, erbjudande, EAN, ...) som JSON i varje varas beskrivning",
           "per_item_events": "Skicka även en händelse för varje tillagd, borttagen, avbockad och ombockad rad, utöver den samlade händelsen ica_list_items_changed",
           "shopping_lists": "Inköpslistorna som ska visas som att göra-listor"
+        },
+        "title": "Inställningar"
+      },
+      "add_list_sync": {
+        "title": "Synka en att göra-lista till ICA (beta)",
+        "description": "Varorna i att göra-listan läggs till i en ICA-lista. När en vara bockas av eller tas bort i listan tas den även bort från ICA. Varor som du lägger till i ICA på annat sätt påverkas inte.",
+        "data": {
+          "source_entity_id": "Att göra-lista"
+        },
+        "data_description": {
+          "source_entity_id": "Listan som varorna hämtas från, till exempel en Mealie-lista"
+        }
+      },
+      "add_list_sync_target": {
+        "title": "Välj ICA-lista",
+        "description": "ICA-listan som varorna i {source} läggs till i.",
+        "data": {
+          "target_list_id": "ICA-lista"
+        }
+      },
+      "remove_list_sync": {
+        "title": "Sluta synka",
+        "description": "Rader som redan har lagts till i ICA ligger kvar.",
+        "data": {
+          "list_syncs": "Synkningar att ta bort"
         }
       }
     },
     "error": {
-      "cannot_connect": "Kunde inte hämta inköpslistorna från ICA, de följda listorna kan inte ändras just nu"
+      "cannot_connect": "Kunde inte hämta inköpslistorna från ICA, de följda listorna kan inte ändras just nu",
+      "list_sync_exists": "Den här listan synkas redan till den ICA-listan"
+    },
+    "abort": {
+      "no_tracked_lists": "Välj först minst en inköpslista under Inställningar"
     }
   },
   "entity": {
@@ -81,6 +118,16 @@
         "integration": {
           "name": "ICA-konto",
           "description": "ICA-kontot som ska uppdateras. Standard är alla konton"
+        }
+      }
+    },
+    "sync_lists": {
+      "name": "Synka listor",
+      "description": "Synkar de valda att göra-listorna till sina ICA-listor direkt",
+      "fields": {
+        "integration": {
+          "name": "ICA-konto",
+          "description": "ICA-kontot som ska synkas. Standard är alla konton"
         }
       }
     },
