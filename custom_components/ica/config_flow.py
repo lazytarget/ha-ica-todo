@@ -16,6 +16,7 @@ from homeassistant.config_entries import (
 )
 from homeassistant.const import CONF_SCAN_INTERVAL
 from homeassistant.core import callback
+from homeassistant.helpers import entity_registry as er
 from homeassistant.helpers import selector
 
 from .const import (
@@ -24,6 +25,9 @@ from .const import (
     CONF_ICA_ID,
     CONF_ICA_PIN,
     CONF_JSON_DATA_IN_DESC,
+    CONF_LIST_SYNC_SOURCE,
+    CONF_LIST_SYNC_TARGET,
+    CONF_LIST_SYNCS,
     CONF_PER_ITEM_EVENTS,
     CONF_SHOPPING_LISTS,
     CONFIG_ENTRY_NAME,
@@ -34,6 +38,7 @@ from .const import (
 from .exceptions import IcaAuthError
 from .icaapi_async import IcaAPIAsync
 from .icatypes import AuthCredentials, AuthState
+from .list_sync import configured_pairs, pair_key
 
 _LOGGER = logging.getLogger(__name__)
 
@@ -168,11 +173,21 @@ class IcaOptionsFlowHandler(OptionsFlow):
     def __init__(self) -> None:
         """Initialize Ica options flow"""
         self._shopping_lists: list[dict] | None = None
+        self._list_sync_source: str | None = None
 
     async def async_step_init(
         self, user_input: dict[str, Any] | None = None
     ) -> ConfigFlowResult:
-        """Handle the initial step."""
+        """Choose what to change."""
+        menu_options = ["settings", "add_list_sync"]
+        if configured_pairs(self.config_entry):
+            menu_options.append("remove_list_sync")
+        return self.async_show_menu(step_id="init", menu_options=menu_options)
+
+    async def async_step_settings(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Handle the general settings."""
         options = dict(self.config_entry.options)
 
         if user_input is not None:
@@ -219,7 +234,144 @@ class IcaOptionsFlowHandler(OptionsFlow):
             }
         )
 
-        return self.async_show_form(step_id="init", data_schema=schema, errors=errors)
+        return self.async_show_form(
+            step_id="settings", data_schema=schema, errors=errors
+        )
+
+    async def async_step_add_list_sync(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick the to-do list to sync into an ICA list."""
+        if not self._tracked_lists():
+            return self.async_abort(reason="no_tracked_lists")
+
+        if user_input is not None:
+            self._list_sync_source = user_input[CONF_LIST_SYNC_SOURCE]
+            return await self.async_step_add_list_sync_target()
+
+        schema = vol.Schema(
+            {
+                # Syncing an ICA list into ICA makes no sense, the selector rejects them
+                vol.Required(CONF_LIST_SYNC_SOURCE): selector.EntitySelector(
+                    selector.EntitySelectorConfig(
+                        domain="todo", exclude_entities=self._ica_todo_entities()
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="add_list_sync", data_schema=schema)
+
+    async def async_step_add_list_sync_target(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Pick the ICA list that the to-do list is synced into."""
+        source = self._list_sync_source
+        lists = self._tracked_lists()
+        errors: dict[str, str] = {}
+        if user_input is not None:
+            pair = {
+                CONF_LIST_SYNC_SOURCE: source,
+                CONF_LIST_SYNC_TARGET: user_input[CONF_LIST_SYNC_TARGET],
+            }
+            pairs = configured_pairs(self.config_entry)
+            if pair_key(pair) in {pair_key(x) for x in pairs}:
+                errors["base"] = "list_sync_exists"
+            else:
+                options = dict(self.config_entry.options)
+                options[CONF_LIST_SYNCS] = [*pairs, pair]
+                return self.async_create_entry(data=options)
+
+        schema = vol.Schema(
+            {
+                vol.Required(
+                    CONF_LIST_SYNC_TARGET, default=self._suggest_target(source, lists)
+                ): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(
+                                label=x["title"], value=x["offlineId"]
+                            )
+                            for x in lists
+                        ],
+                        mode=selector.SelectSelectorMode.DROPDOWN,
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(
+            step_id="add_list_sync_target",
+            data_schema=schema,
+            errors=errors,
+            description_placeholders={"source": self._entity_name(source)},
+        )
+
+    async def async_step_remove_list_sync(
+        self, user_input: dict[str, Any] | None = None
+    ) -> ConfigFlowResult:
+        """Stop syncing to-do lists into ICA lists."""
+        pairs = configured_pairs(self.config_entry)
+        if user_input is not None:
+            removed = set(user_input[CONF_LIST_SYNCS])
+            options = dict(self.config_entry.options)
+            options[CONF_LIST_SYNCS] = [x for x in pairs if pair_key(x) not in removed]
+            return self.async_create_entry(data=options)
+
+        titles = {
+            str(x["offlineId"]).lower(): x["title"] for x in self._tracked_lists()
+        }
+        schema = vol.Schema(
+            {
+                vol.Required(CONF_LIST_SYNCS, default=[]): selector.SelectSelector(
+                    selector.SelectSelectorConfig(
+                        options=[
+                            selector.SelectOptionDict(
+                                label="{} → ICA {}".format(
+                                    self._entity_name(x[CONF_LIST_SYNC_SOURCE]),
+                                    titles.get(
+                                        str(x[CONF_LIST_SYNC_TARGET]).lower(),
+                                        x[CONF_LIST_SYNC_TARGET],
+                                    ),
+                                ),
+                                value=pair_key(x),
+                            )
+                            for x in pairs
+                        ],
+                        mode=selector.SelectSelectorMode.LIST,
+                        multiple=True,
+                    )
+                ),
+            }
+        )
+        return self.async_show_form(step_id="remove_list_sync", data_schema=schema)
+
+    def _tracked_lists(self) -> list[dict]:
+        coordinator = self.config_entry.runtime_data
+        return [
+            x
+            for x in coordinator.snapshot()["shopping_lists"]
+            if x.get("offlineId") and x.get("title")
+        ]
+
+    def _ica_todo_entities(self) -> list[str]:
+        registry = er.async_get(self.hass)
+        return [
+            e.entity_id
+            for e in registry.entities.values()
+            if e.platform == DOMAIN and e.domain == "todo"
+        ]
+
+    def _entity_name(self, entity_id: str | None) -> str:
+        state = self.hass.states.get(entity_id) if entity_id else None
+        return state.name if state else str(entity_id)
+
+    def _suggest_target(self, source: str | None, lists: list[dict]) -> str:
+        """The list named like the source without its prefix, e.g. "Handla" for "Mealie Handla"."""
+        name = self._entity_name(source).split(maxsplit=1)
+        wanted = (name[1] if len(name) > 1 else name[0]).casefold()
+        return next(
+            (x["offlineId"] for x in lists if x["title"].casefold() == wanted),
+            lists[0]["offlineId"],
+        )
 
     async def _async_get_shopping_lists(self) -> list[dict]:
         # Re-uses the API client of the loaded entry, which is already logged in.

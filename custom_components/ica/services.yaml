@@ -11,6 +11,16 @@ refresh_shopping_lists:
         config_entry:
           integration: ica
 
+sync_lists:
+  fields:
+    integration:
+      name: "ICA Account"
+      description: "The ICA account to sync. Defaults to all accounts"
+      required: false
+      selector:
+        config_entry:
+          integration: ica
+
 get_recipe:
   # target:
   #   entity:

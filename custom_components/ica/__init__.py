@@ -28,6 +28,11 @@ from .const import (
 from .coordinator import IcaCoordinator
 from .icaapi_async import IcaAPIAsync
 from .icatypes import AuthCredentials, AuthState
+from .list_sync import (
+    ListSyncManager,
+    async_remove_list_sync_store,
+    configured_pairs,
+)
 from .services import setup_global_services
 
 _LOGGER = logging.getLogger(__name__)
@@ -68,6 +73,9 @@ async def async_setup_entry(hass: HomeAssistant, entry: IcaConfigEntry) -> bool:
     entry.runtime_data = coordinator
 
     await hass.config_entries.async_forward_entry_setups(entry, PLATFORMS)
+    if configured_pairs(entry):
+        coordinator.list_sync = ListSyncManager(hass, entry, coordinator)
+        await coordinator.list_sync.async_setup()
     entry.async_on_unload(entry.add_update_listener(_async_options_updated))
     return True
 
@@ -155,6 +163,7 @@ async def async_remove_entry(hass: HomeAssistant, entry: ConfigEntry) -> None:
     await hass.async_add_executor_job(
         _remove_cache_files, hass, entry_cache_key(entry), not remaining
     )
+    await async_remove_list_sync_store(hass, entry)
 
 
 def _remove_cache_files(hass: HomeAssistant, key: str, remove_shared: bool) -> None:

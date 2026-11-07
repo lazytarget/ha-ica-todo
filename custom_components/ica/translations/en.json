@@ -36,6 +36,14 @@
   "options": {
     "step": {
       "init": {
+        "title": "ICA",
+        "menu_options": {
+          "settings": "Settings",
+          "add_list_sync": "Sync a to-do list into ICA (beta)",
+          "remove_list_sync": "Stop syncing a to-do list"
+        }
+      },
+      "settings": {
         "data": {
           "scan_interval": "Update interval (minutes)",
           "json_data_in_desc": "JSON data in description",
@@ -47,11 +55,40 @@
           "json_data_in_desc": "Show extra item data (quantity, offer, EAN, ...) as JSON in each item's description",
           "per_item_events": "Also fire an event for every added, removed, checked off and unchecked item, besides the combined ica_list_items_changed event",
           "shopping_lists": "The shopping lists to track as to-do lists"
+        },
+        "title": "Settings"
+      },
+      "add_list_sync": {
+        "title": "Sync a to-do list into ICA (beta)",
+        "description": "The items of the to-do list are added to an ICA list. When an item is checked off or deleted there, it is removed from ICA as well. Items you add to ICA in other ways are left alone.",
+        "data": {
+          "source_entity_id": "To-do list"
+        },
+        "data_description": {
+          "source_entity_id": "The list to take the items from, e.g. a Mealie list"
+        }
+      },
+      "add_list_sync_target": {
+        "title": "Pick the ICA list",
+        "description": "The ICA list that the items of {source} are added to.",
+        "data": {
+          "target_list_id": "ICA list"
+        }
+      },
+      "remove_list_sync": {
+        "title": "Stop syncing",
+        "description": "Rows that were added to ICA already stay there.",
+        "data": {
+          "list_syncs": "Syncs to remove"
         }
       }
     },
     "error": {
-      "cannot_connect": "Could not fetch the shopping lists from ICA, the tracked lists can't be changed right now"
+      "cannot_connect": "Could not fetch the shopping lists from ICA, the tracked lists can't be changed right now",
+      "list_sync_exists": "This list is synced into that ICA list already"
+    },
+    "abort": {
+      "no_tracked_lists": "Pick at least one shopping list under Settings first"
     }
   },
   "entity": {
@@ -81,6 +118,16 @@
         "integration": {
           "name": "ICA Account",
           "description": "The ICA account to refresh. Defaults to all accounts"
+        }
+      }
+    },
+    "sync_lists": {
+      "name": "Sync lists",
+      "description": "Syncs the chosen to-do lists into their ICA lists right away",
+      "fields": {
+        "integration": {
+          "name": "ICA Account",
+          "description": "The ICA account to sync. Defaults to all accounts"
         }
       }
     },
